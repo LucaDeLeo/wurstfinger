@@ -26,6 +26,7 @@ enum KeyboardAction {
     case copy
     case paste
     case cut
+    case selectAll
 }
 
 enum CapitalizationStyle {
@@ -354,12 +355,11 @@ final class KeyboardViewModel: ObservableObject {
 
     func handleGlobeSwipe(direction: KeyboardDirection) {
         switch direction {
-        case .left:
+        case .center, .left:
             handleAdvanceToNextInputMode()
         case .down:
             handleDismissKeyboard()
         default:
-            // Center and other directions reserved for future use (e.g., emoji)
             break
         }
     }
@@ -388,6 +388,7 @@ final class KeyboardViewModel: ObservableObject {
     /// - Up: Copy
     /// - Up-Right: Cut
     /// - Down: Paste
+    /// - Left: Select All
     /// - Other directions: Toggle symbols
     func handleSymbolsKeySwipe(_ direction: KeyboardDirection) {
         switch direction {
@@ -397,6 +398,8 @@ final class KeyboardViewModel: ObservableObject {
             actionHandler?(.cut)
         case .down:
             actionHandler?(.paste)
+        case .left:
+            actionHandler?(.selectAll)
         default:
             toggleSymbols()
         }

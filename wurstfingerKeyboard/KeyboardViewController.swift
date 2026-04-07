@@ -140,6 +140,8 @@ final class KeyboardViewController: UIInputViewController {
             handlePaste()
         case .cut:
             handleCut()
+        case .selectAll:
+            handleSelectAll()
         }
     }
 
@@ -187,6 +189,18 @@ final class KeyboardViewController: UIInputViewController {
             UIPasteboard.general.string = selectedText
             textDocumentProxy.deleteBackward()
             updateAutoCapitalization()
+        }
+    }
+
+    /// Select all text in the current text field
+    private func handleSelectAll() {
+        // Move to the very end of the document
+        while let after = textDocumentProxy.documentContextAfterInput, !after.isEmpty {
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: after.count)
+        }
+        // Select backwards to the very beginning
+        if let before = textDocumentProxy.documentContextBeforeInput {
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: -before.count)
         }
     }
 
