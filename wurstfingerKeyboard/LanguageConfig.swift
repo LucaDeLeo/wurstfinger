@@ -24,18 +24,25 @@ struct LanguageConfig: Identifiable {
     /// Example: "0_0_down" = character when swiping down on top-left key
     let specialCharacters: [String: String]
 
+    /// Additional key overrides that replace hardcoded positions via post-processing.
+    /// Used by layouts like ENThumbKey whose swipe characters differ from the
+    /// standard MessagEase positions that createLetterRows hardcodes.
+    let keyOverrides: ThumbKeyOverride?
+
     init(
         id: String,
         name: String,
         locale: Locale,
         centerCharacters: [[String]],
-        specialCharacters: [String: String] = [:]
+        specialCharacters: [String: String] = [:],
+        keyOverrides: ThumbKeyOverride? = nil
     ) {
         self.id = id
         self.name = name
         self.locale = locale
         self.centerCharacters = centerCharacters
         self.specialCharacters = specialCharacters
+        self.keyOverrides = keyOverrides
     }
 }
 
@@ -550,6 +557,57 @@ extension LanguageConfig {
         ]
     )
 
+    /// ENThumbKey layout with Spanish accents
+    /// Based on the thumb-key Android keyboard ENThumbKey layout (s,r,o / n,h,a / t,i,e)
+    /// with Spanish character additions (ñ, á, é, í, ó, ú, ¡, ¿)
+    static let enThumbKeySpanish = LanguageConfig(
+        id: "en_thumbkey_es",
+        name: "ENThumbKey + Español",
+        locale: Locale(identifier: "es_ES"),
+        centerCharacters: [
+            ["s", "r", "o"],
+            ["n", "h", "a"],
+            ["t", "i", "e"]
+        ],
+        specialCharacters: [
+            // Positions that createLetterRows reads from specialCharacters:
+            "0_0_downRight": "w",
+            "0_1_down": "g",
+            "0_2_downLeft": "u",
+            "0_2_upLeft": "¿",
+            "1_0_right": "m",
+            "1_1_upLeft": "j",
+            "1_1_up": "q",
+            "1_1_upRight": "b",
+            "1_1_left": "k",
+            "1_1_right": "p",
+            "1_1_downLeft": "v",
+            "1_1_down": "x",
+            "1_1_downRight": "y",
+            "1_2_left": "l",
+            "2_0_upRight": "c",
+            "2_1_up": "f",
+            "2_1_right": "z",
+            "2_2_upLeft": "d",
+        ],
+        keyOverrides: ThumbKeyOverride(
+            centerOverrides: [:],
+            specialOverrides: [
+                // Spanish additions at non-configurable positions:
+                "0_0_upLeft": "¡",
+                "0_0_upRight": "!",
+                "0_2_upRight": "?",
+                "0_2_right": "ó",
+                "0_2_downRight": "ú",
+                "1_0_left": "ñ",
+                "1_2_upRight": "á",
+                "2_1_left": "í",
+                "2_2_right": "é",
+            ],
+            removals: []
+        )
+    )
+
     // MARK: - Language Registry
 
     /// All available language configurations
@@ -558,6 +616,7 @@ extension LanguageConfig {
         .spanishCatalan, // Català (Catalan)
         .croatian, // Hrvatski (Croatian)
         .english, // English
+        .enThumbKeySpanish, // ENThumbKey + Español
         .estonianFinnish, // Eesti-Suomi (Estonian-Finnish)
         .finnish, // Suomi (Finnish)
         .french, // Français (French)

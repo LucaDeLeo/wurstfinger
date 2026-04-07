@@ -299,6 +299,9 @@ struct KeyboardLayout {
         overrides: ThumbKeyOverride? = nil
     ) -> KeyboardLayout {
         var lowerRows = Self.createLetterRows(for: config)
+        if let langOverrides = config.keyOverrides, !langOverrides.isEmpty {
+            lowerRows = Self.applyKeyOverrides(lowerRows, overrides: langOverrides, locale: config.locale)
+        }
         if let overrides, !overrides.isEmpty {
             lowerRows = Self.applyKeyOverrides(lowerRows, overrides: overrides, locale: config.locale)
         }
