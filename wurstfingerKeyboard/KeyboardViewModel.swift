@@ -147,6 +147,7 @@ final class KeyboardViewModel: ObservableObject {
     private var spaceDragResidual: CGFloat = 0
     private var isDeleteDragging = false
     private var deleteDragResidual: CGFloat = 0
+    private var lastOverrideData: Data?
     private var userDefaultsObserver: NSObjectProtocol?
     private var settingsCancellables = Set<AnyCancellable>()
 
@@ -173,10 +174,12 @@ final class KeyboardViewModel: ObservableObject {
             locale = Locale(identifier: "de_DE")
         } else {
             let selectedLanguage = LanguageSettings.shared.selectedLanguage
-            // Read numpad style from UserDefaults (default to phone style)
+            let overrideData = defaults.data(forKey: SettingsKey.keyModificationsParsed.rawValue)
+            lastOverrideData = overrideData
+            let thumbKeyOverride = overrideData.flatMap { try? JSONDecoder().decode(ThumbKeyOverride.self, from: $0) }
             let numpadStyleRaw = defaults.string(forKey: Self.numpadStyleKey) ?? NumpadStyle.phone.rawValue
             let numpadStyle = NumpadStyle(rawValue: numpadStyleRaw) ?? .phone
-            self.layout = KeyboardLayout.layout(for: selectedLanguage, numpadStyle: numpadStyle)
+            self.layout = KeyboardLayout.layout(for: selectedLanguage, numpadStyle: numpadStyle, overrides: thumbKeyOverride)
             locale = selectedLanguage.locale
         }
 
@@ -224,20 +227,20 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     private func reloadLanguage() {
-        // Read language ID directly from UserDefaults to catch changes from host app
         let languageId = sharedDefaults.string(forKey: SettingsKey.selectedLanguageId.rawValue) ?? LanguageSettings.detectSystemLanguage()
+        let currentData = sharedDefaults.data(forKey: SettingsKey.keyModificationsParsed.rawValue)
 
-        if languageId != locale.identifier {
-            // Notify SwiftUI that we're about to change the model
+        let overrideChanged = currentData != lastOverrideData
+        if languageId != locale.identifier || overrideChanged {
             objectWillChange.send()
+            lastOverrideData = currentData
 
             if let newLanguage = LanguageConfig.language(withId: languageId) {
-                // Read numpad style from UserDefaults (default to phone style)
+                let thumbKeyOverride = currentData.flatMap { try? JSONDecoder().decode(ThumbKeyOverride.self, from: $0) }
                 let numpadStyleRaw = sharedDefaults.string(forKey: Self.numpadStyleKey) ?? NumpadStyle.phone.rawValue
                 let numpadStyle = NumpadStyle(rawValue: numpadStyleRaw) ?? .phone
-                layout = KeyboardLayout.layout(for: newLanguage, numpadStyle: numpadStyle)
+                layout = KeyboardLayout.layout(for: newLanguage, numpadStyle: numpadStyle, overrides: thumbKeyOverride)
                 locale = newLanguage.locale
-                // Reset to lower layer when language changes
                 activeLayer = .lower
                 isCapsLockActive = false
                 isManualShift = false

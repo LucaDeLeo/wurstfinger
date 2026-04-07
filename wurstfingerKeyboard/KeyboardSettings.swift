@@ -28,6 +28,8 @@ enum SettingsKey: String {
     case expertModeEnabled
     case keyboardStyle
     case keyboardFullAccess
+    case keyModificationsYAML
+    case keyModificationsParsed
 }
 
 // MARK: - Haptic Settings

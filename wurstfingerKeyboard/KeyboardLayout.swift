@@ -139,6 +139,20 @@ enum KeyboardDirection: CaseIterable {
         case .center: .center
         }
     }
+
+    var configKey: String {
+        switch self {
+        case .center: "center"
+        case .up: "up"
+        case .down: "down"
+        case .left: "left"
+        case .right: "right"
+        case .upLeft: "upLeft"
+        case .upRight: "upRight"
+        case .downLeft: "downLeft"
+        case .downRight: "downRight"
+        }
+    }
 }
 
 enum KeyboardCircularDirection {
@@ -279,8 +293,15 @@ struct KeyboardLayout {
     }
 
     /// Creates a keyboard layout for the specified language configuration
-    static func layout(for config: LanguageConfig, numpadStyle: NumpadStyle = .phone) -> KeyboardLayout {
-        let lowerRows = Self.createLetterRows(for: config)
+    static func layout(
+        for config: LanguageConfig,
+        numpadStyle: NumpadStyle = .phone,
+        overrides: ThumbKeyOverride? = nil
+    ) -> KeyboardLayout {
+        var lowerRows = Self.createLetterRows(for: config)
+        if let overrides, !overrides.isEmpty {
+            lowerRows = Self.applyKeyOverrides(lowerRows, overrides: overrides, locale: config.locale)
+        }
         let numberRows = Self.createNumberRows(for: config, numpadStyle: numpadStyle)
         let symbolRows = lowerRows
 
@@ -818,6 +839,69 @@ extension KeyboardLayout {
             swipeReturnOutputs: key.swipeReturnOutputs,
             circularOutputs: newCircular
         )
+    }
+
+    /// Applies ThumbKeyOverride to built letter rows, replacing any swipe direction
+    /// including hardcoded positions that specialCharacters cannot reach.
+    static func applyKeyOverrides(
+        _ rows: [[MessagEaseKey]],
+        overrides: ThumbKeyOverride,
+        locale: Locale
+    ) -> [[MessagEaseKey]] {
+        rows.enumerated().map { rowIndex, row in
+            row.enumerated().map { colIndex, key in
+                let posKey = "\(rowIndex)_\(colIndex)"
+                let newCenter = overrides.centerOverrides[posKey]
+
+                var swipeChanges: [KeyboardDirection: MessagEaseOutput] = [:]
+                var returnChanges: [KeyboardDirection: MessagEaseOutput] = [:]
+                var removals: Set<KeyboardDirection> = []
+
+                for direction in KeyboardDirection.allCases where direction != .center {
+                    let fullKey = "\(posKey)_\(direction.configKey)"
+                    if overrides.removals.contains(fullKey) {
+                        removals.insert(direction)
+                    } else if let char = overrides.specialOverrides[fullKey] {
+                        swipeChanges[direction] = .text(char)
+                        returnChanges[direction] = .text(char.uppercased(with: locale))
+                    }
+                }
+
+                guard newCenter != nil || !swipeChanges.isEmpty || !removals.isEmpty else {
+                    return key
+                }
+
+                let center = newCenter ?? key.center
+                var swipeOutputs = key.swipeOutputs
+                var returnOutputs = key.swipeReturnOutputs
+                var circularOutputs = key.circularOutputs
+
+                for dir in removals {
+                    swipeOutputs.removeValue(forKey: dir)
+                    returnOutputs.removeValue(forKey: dir)
+                }
+                for (dir, output) in swipeChanges {
+                    swipeOutputs[dir] = output
+                }
+                for (dir, output) in returnChanges {
+                    returnOutputs[dir] = output
+                }
+
+                if newCenter != nil, center.rangeOfCharacter(from: .letters) != nil {
+                    let uppercased = center.uppercased(with: locale)
+                    circularOutputs[.clockwise] = .text(uppercased)
+                    circularOutputs[.counterclockwise] = .text(uppercased)
+                }
+
+                return MessagEaseKey(
+                    id: key.id,
+                    center: center,
+                    swipeOutputs: swipeOutputs,
+                    swipeReturnOutputs: returnOutputs,
+                    circularOutputs: circularOutputs
+                )
+            }
+        }
     }
 
     private static func makeKey(
