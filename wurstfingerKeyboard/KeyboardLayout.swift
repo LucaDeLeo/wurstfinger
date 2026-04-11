@@ -1132,6 +1132,9 @@ enum KeyboardConstants {
         /// Distance per cursor movement step (one character).
         /// Provides smooth, controlled cursor navigation.
         static let dragStep: CGFloat = 14
+
+        /// Max interval between two space taps to count as a double-tap.
+        static let doubleTapWindow: TimeInterval = 0.3
     }
 
     // MARK: - Delete Key Gestures

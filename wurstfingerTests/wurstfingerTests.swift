@@ -521,4 +521,102 @@ struct wurstfingerTests {
 
         #expect(composed.last == "$", "$ should still be auto-detected as compose trigger")
     }
+
+    // MARK: - Double-Tap Space Tests
+
+    @MainActor
+    private func captureDoubleTapActions(
+        mode: DoubleTapSpaceAction,
+        suiteName: String,
+        taps: (KeyboardViewModel, _ t0: Date) -> Void
+    ) throws -> [KeyboardAction] {
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(mode.rawValue, forKey: SettingsKey.doubleTapSpaceAction.rawValue)
+
+        let viewModel = KeyboardViewModel(userDefaults: defaults, shouldPersistSettings: false)
+        var captured: [KeyboardAction] = []
+        viewModel.bindActionHandler { captured.append($0) }
+
+        let t0 = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        taps(viewModel, t0)
+        return captured
+    }
+
+    @Test @MainActor func doubleTapWithinWindowEmitsReplacement() throws {
+        let actions = try captureDoubleTapActions(
+            mode: .comma,
+            suiteName: "group.de.akator.wurstfinger.tests.doubleTap.comma"
+        ) { vm, t0 in
+            vm.handleSpaceTap(at: t0)
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.15))
+        }
+
+        #expect(actions == [.space, .replaceTrailingSpace(", ")])
+    }
+
+    @Test @MainActor func singleTapOutsideWindowEmitsOnlySpace() throws {
+        let actions = try captureDoubleTapActions(
+            mode: .comma,
+            suiteName: "group.de.akator.wurstfinger.tests.doubleTap.outside"
+        ) { vm, t0 in
+            vm.handleSpaceTap(at: t0)
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.5))
+        }
+
+        #expect(actions == [.space, .space])
+    }
+
+    @Test @MainActor func tripleTapDoesNotRepeatReplacement() throws {
+        let actions = try captureDoubleTapActions(
+            mode: .comma,
+            suiteName: "group.de.akator.wurstfinger.tests.doubleTap.triple"
+        ) { vm, t0 in
+            vm.handleSpaceTap(at: t0)
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.10))
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.20))
+        }
+
+        #expect(actions == [.space, .replaceTrailingSpace(", "), .space])
+    }
+
+    @Test @MainActor func spaceDragCancelsDoubleTap() throws {
+        let actions = try captureDoubleTapActions(
+            mode: .comma,
+            suiteName: "group.de.akator.wurstfinger.tests.doubleTap.drag"
+        ) { vm, t0 in
+            vm.handleSpaceTap(at: t0)
+            vm.beginSpaceDrag()
+            vm.endSpaceDrag()
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.10))
+        }
+
+        #expect(actions == [.space, .space])
+    }
+
+    @Test @MainActor func offSettingAlwaysEmitsSpace() throws {
+        let actions = try captureDoubleTapActions(
+            mode: .off,
+            suiteName: "group.de.akator.wurstfinger.tests.doubleTap.off"
+        ) { vm, t0 in
+            vm.handleSpaceTap(at: t0)
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.05))
+        }
+
+        #expect(actions == [.space, .space])
+    }
+
+    @Test @MainActor func periodSettingEmitsPeriodSpace() throws {
+        let actions = try captureDoubleTapActions(
+            mode: .period,
+            suiteName: "group.de.akator.wurstfinger.tests.doubleTap.period"
+        ) { vm, t0 in
+            vm.handleSpaceTap(at: t0)
+            vm.handleSpaceTap(at: t0.addingTimeInterval(0.15))
+        }
+
+        #expect(actions == [.space, .replaceTrailingSpace(". ")])
+    }
 }

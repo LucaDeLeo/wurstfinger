@@ -30,6 +30,33 @@ enum SettingsKey: String {
     case keyboardFullAccess
     case keyModificationsYAML
     case keyModificationsParsed
+    case doubleTapSpaceAction
+}
+
+// MARK: - Double-Tap Space
+
+/// What to insert when the user taps the space bar twice in quick succession.
+enum DoubleTapSpaceAction: String, CaseIterable {
+    case off
+    case comma
+    case period
+
+    static let `default`: DoubleTapSpaceAction = .comma
+
+    /// String that should replace the trailing space on a double-tap,
+    /// or `nil` if the feature is disabled.
+    var insertion: String? {
+        switch self {
+        case .off:    nil
+        case .comma:  ", "
+        case .period: ". "
+        }
+    }
+
+    static func load(from defaults: UserDefaults) -> DoubleTapSpaceAction {
+        let raw = defaults.string(forKey: SettingsKey.doubleTapSpaceAction.rawValue)
+        return raw.flatMap(DoubleTapSpaceAction.init(rawValue:)) ?? .default
+    }
 }
 
 // MARK: - Haptic Settings

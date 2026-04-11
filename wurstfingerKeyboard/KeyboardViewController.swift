@@ -121,6 +121,8 @@ final class KeyboardViewController: UIInputViewController {
         case .space:
             textDocumentProxy.insertText(" ")
             checkAutoCapitalization()
+        case let .replaceTrailingSpace(text):
+            replaceTrailingSpace(with: text)
         case .newline:
             textDocumentProxy.insertText("\n")
             checkAutoCapitalization()
@@ -152,6 +154,24 @@ final class KeyboardViewController: UIInputViewController {
            SharedDefaults.store.bool(forKey: SettingsKey.autoCapitalizeEnabled.rawValue) {
             viewModel.setLayer(.upper)
         }
+    }
+
+    /// Only replaces the trailing space when the preceding char is a word char,
+    /// so double-taps after existing punctuation fall through to a normal space.
+    private func replaceTrailingSpace(with text: String) {
+        guard let before = textDocumentProxy.documentContextBeforeInput,
+              before.hasSuffix(" ") else {
+            textDocumentProxy.insertText(" ")
+            return
+        }
+        let trimmed = before.dropLast()
+        guard let prior = trimmed.last, prior.isLetter || prior.isNumber else {
+            textDocumentProxy.insertText(" ")
+            return
+        }
+        textDocumentProxy.deleteBackward()
+        textDocumentProxy.insertText(text)
+        updateAutoCapitalization()
     }
 
     /// Delete one character after cursor. Returns `true` if a character was deleted.

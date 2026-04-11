@@ -10,11 +10,12 @@ import CoreGraphics
 import Foundation
 import UIKit
 
-enum KeyboardAction {
+enum KeyboardAction: Equatable {
     case insert(String)
     case deleteBackward
     case deleteForward
     case space
+    case replaceTrailingSpace(String)
     case newline
     case advanceToNextInputMode
     case dismissKeyboard
@@ -29,7 +30,7 @@ enum KeyboardAction {
     case selectAll
 }
 
-enum CapitalizationStyle {
+enum CapitalizationStyle: Equatable {
     case uppercased
     case lowercased
 }
@@ -146,6 +147,7 @@ final class KeyboardViewModel: ObservableObject {
     private var actionHandler: ((KeyboardAction) -> Void)?
     private var isSpaceDragging = false
     private var spaceDragResidual: CGFloat = 0
+    private var lastSpaceTapAt: Date?
     private var isDeleteDragging = false
     private var deleteDragResidual: CGFloat = 0
     private var lastOverrideData: Data?
@@ -333,8 +335,17 @@ final class KeyboardViewModel: ObservableObject {
         // If no output is defined, do nothing (no fallback to tap)
     }
 
-    func handleSpace() {
-        actionHandler?(.space)
+    func handleSpaceTap(at now: Date = Date()) {
+        let action = DoubleTapSpaceAction.load(from: sharedDefaults)
+        if let last = lastSpaceTapAt,
+           now.timeIntervalSince(last) <= KeyboardConstants.SpaceGestures.doubleTapWindow,
+           let insertion = action.insertion {
+            actionHandler?(.replaceTrailingSpace(insertion))
+            lastSpaceTapAt = nil
+        } else {
+            actionHandler?(.space)
+            lastSpaceTapAt = action == .off ? nil : now
+        }
     }
 
     func handleDelete() {
@@ -512,6 +523,8 @@ final class KeyboardViewModel: ObservableObject {
     func beginSpaceDrag() {
         isSpaceDragging = true
         spaceDragResidual = 0
+        // Any drag between taps cancels the double-tap window.
+        lastSpaceTapAt = nil
     }
 
     func updateSpaceDrag(deltaX: CGFloat) {

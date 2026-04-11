@@ -56,7 +56,7 @@ struct SpaceKeyButton: View {
                     }
 
                     if !hasDragged {
-                        viewModel.handleSpace()
+                        viewModel.handleSpaceTap()
                     }
 
                     resetGestureState()

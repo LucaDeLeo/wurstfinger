@@ -37,6 +37,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.autoCapitalizeEnabled.rawValue, store: SharedDefaults.store)
     private var autoCapitalizeEnabled = false
 
+    @AppStorage(SettingsKey.doubleTapSpaceAction.rawValue, store: SharedDefaults.store)
+    private var doubleTapSpaceActionRaw = DoubleTapSpaceAction.default.rawValue
+
     private let licenseURL = URL(string: "https://github.com/cl445/wurstfinger/blob/main/LICENSE")!
 
     @AppStorage(SettingsKey.expertModeEnabled.rawValue, store: SharedDefaults.store)
@@ -78,8 +81,29 @@ struct SettingsView: View {
                     subtitle: "Capitalize after sentence-ending punctuation"
                 )
             }
+
+            Picker(selection: $doubleTapSpaceActionRaw) {
+                Text("Off").tag(DoubleTapSpaceAction.off.rawValue)
+                Text("Comma (, )").tag(DoubleTapSpaceAction.comma.rawValue)
+                Text("Period (. )").tag(DoubleTapSpaceAction.period.rawValue)
+            } label: {
+                SettingsRow(
+                    icon: "space",
+                    color: .blue,
+                    title: "Double-Tap Space",
+                    subtitle: doubleTapSpaceDescription
+                )
+            }
         } header: {
             Text("General")
+        }
+    }
+
+    private var doubleTapSpaceDescription: String {
+        switch DoubleTapSpaceAction(rawValue: doubleTapSpaceActionRaw) ?? .default {
+        case .off:    "Disabled"
+        case .comma:  "Inserts ', ' on quick double-tap"
+        case .period: "Inserts '. ' on quick double-tap"
         }
     }
 
