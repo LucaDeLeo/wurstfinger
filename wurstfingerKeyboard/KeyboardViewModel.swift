@@ -75,6 +75,9 @@ final class KeyboardViewModel: ObservableObject {
     var resolverChain: GestureResolverChain?
     var returnSwipeResolverChain: GestureResolverChain?
     var pipeline: ActionPipeline?
+    /// Reference to the live double-tap-space middleware so that space
+    /// drag/slide gestures can cancel a pending second-tap before it fires.
+    weak var doubleTapSpaceMiddleware: DoubleTapSpaceMiddleware?
     weak var textInputTarget: TextInputTarget?
     var onAdvanceToNextInputMode: (() -> Void)?
     var onDismissKeyboard: (() -> Void)?

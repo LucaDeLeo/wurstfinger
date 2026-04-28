@@ -118,7 +118,22 @@ extension KeyboardViewModel {
             locale: { [weak self] in self?.pipelineLocale ?? Locale.current }
         ))
 
-        // 5. Basic text input (commitText, deleteBackward, space, newline, moveCursor)
+        // 5. Double-tap space → punctuation (must run before TextInputMiddleware
+        //    so it can short-circuit the second .space and substitute ", " or ". ").
+        let doubleTapMiddleware = DoubleTapSpaceMiddleware(
+            setting: { [weak self] in
+                guard let raw = self?.sharedDefaults.string(forKey: SettingsKey.doubleTapSpaceAction.rawValue),
+                      let parsed = DoubleTapSpaceAction(rawValue: raw)
+                else { return .default }
+                return parsed
+            },
+            insertText: { [weak self] text in self?.textInputTarget?.insertText(text) },
+            deleteBackward: { [weak self] in self?.textInputTarget?.deleteBackward() }
+        )
+        doubleTapSpaceMiddleware = doubleTapMiddleware
+        middlewares.append(doubleTapMiddleware)
+
+        // 6. Basic text input (commitText, deleteBackward, space, newline, moveCursor)
         middlewares.append(TextInputMiddleware(
             target: { [weak self] in self?.textInputTarget }
         ))
@@ -258,6 +273,7 @@ extension KeyboardViewModel {
         case .began:
             isSpaceDragging = true
             spaceDragResidual = 0
+            doubleTapSpaceMiddleware?.cancelPendingTap()
         case let .changed(deltaX):
             guard isSpaceDragging, deltaX != 0 else { return }
             spaceDragResidual += deltaX

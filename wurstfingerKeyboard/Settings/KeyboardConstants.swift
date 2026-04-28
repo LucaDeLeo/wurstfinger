@@ -137,6 +137,11 @@ enum KeyboardConstants {
         /// Maximum ratio of final displacement to peak displacement for a return swipe.
         /// Below this threshold, the gesture is classified as a return swipe (word movement).
         static let returnSwipeThreshold: CGFloat = 0.3
+
+        /// Maximum interval between two consecutive space taps for the
+        /// double-tap punctuation shortcut. Mirrors typical iOS double-tap
+        /// detection windows.
+        static let doubleTapWindow: TimeInterval = 0.3
     }
 
     // MARK: - Delete Key Gestures

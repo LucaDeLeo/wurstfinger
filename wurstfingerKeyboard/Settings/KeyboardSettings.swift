@@ -31,6 +31,28 @@ enum SettingsKey: String {
     case cursorMovementStyle
     case keyModificationsYAML
     case keyModificationsParsed
+    case doubleTapSpaceAction
+}
+
+/// Replacement to insert when the user double-taps the space bar within
+/// `KeyboardConstants.SpaceGestures.doubleTapWindow`.
+enum DoubleTapSpaceAction: String, Codable, CaseIterable {
+    case off
+    case comma
+    case period
+
+    /// Default behaviour for new installs.
+    static let `default`: DoubleTapSpaceAction = .off
+
+    /// Text the middleware inserts in place of the previous trailing space.
+    /// `nil` for `.off`.
+    var replacement: String? {
+        switch self {
+        case .off:    nil
+        case .comma:  ", "
+        case .period: ". "
+        }
+    }
 }
 
 // MARK: - Haptic Settings
