@@ -432,6 +432,42 @@ enum LanguageDefinitions {
         inputMethod: .telex
     )
 
+    // MARK: - ENThumbKey + Español
+
+    /// Android Thumb-Key ENThumbKey grid (s,r,o / n,h,a / t,i,e) with
+    /// Spanish letters and punctuation (ñ, á, é, í, ó, ú, ¡, ¿) layered on
+    /// top via directional overrides.
+    static let enThumbKeySpanish = GridKeyboardFactory.layout(
+        id: "en_thumbkey_es",
+        title: "ENThumbKey + Español",
+        localeIdentifier: "es_ES",
+        centerCharacters: [
+            ["s", "r", "o"],
+            ["n", "h", "a"],
+            ["t", "i", "e"],
+        ],
+        directionalOverrides: [
+            GridSlot.topLeft: [
+                .swipeUpLeft: "¡", .swipeUpRight: "!", .swipeDownRight: "w",
+            ],
+            GridSlot.topCenter: [.swipeDown: "g"],
+            GridSlot.topRight: [
+                .swipeUpLeft: "¿", .swipeUpRight: "?",
+                .swipeRight: "ó", .swipeDownLeft: "u", .swipeDownRight: "ú",
+            ],
+            GridSlot.midLeft: [.swipeLeft: "ñ", .swipeRight: "m"],
+            GridSlot.center: [
+                .swipeUpLeft: "j", .swipeUp: "q", .swipeUpRight: "b",
+                .swipeLeft: "k", .swipeRight: "p",
+                .swipeDownLeft: "v", .swipeDown: "x", .swipeDownRight: "y",
+            ],
+            GridSlot.midRight: [.swipeUpRight: "á", .swipeLeft: "l"],
+            GridSlot.bottomLeft: [.swipeUpRight: "c"],
+            GridSlot.bottomCenter: [.swipeUp: "f", .swipeLeft: "í", .swipeRight: "z"],
+            GridSlot.bottomRight: [.swipeUpLeft: "d", .swipeRight: "é"],
+        ]
+    )
+
     // MARK: - Registry
 
     /// All available language definitions, sorted alphabetically by title.
@@ -439,6 +475,7 @@ enum LanguageDefinitions {
         spanishCatalan,
         croatian,
         english,
+        enThumbKeySpanish,
         estonianFinnish,
         finnish,
         french,
