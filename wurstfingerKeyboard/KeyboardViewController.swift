@@ -10,9 +10,10 @@ import SwiftUI
 import UIKit
 
 final class KeyboardViewController: UIInputViewController {
-    private var hostingController: UIHostingController<KeyboardRootView>?
+    private var hostingController: UIHostingController<AnyView>?
     private lazy var viewModel = KeyboardViewModel()
     private var heightConstraint: NSLayoutConstraint?
+    private var documentProxyTarget: DocumentProxyTarget?
 
     /// Reports the active keyboard language to iOS (shown in Settings > Keyboards).
     /// Reads directly from SharedDefaults to pick up language changes made in the host app,
@@ -34,10 +35,20 @@ final class KeyboardViewController: UIInputViewController {
         // Set background immediately to avoid flash
         view.backgroundColor = .clear
 
-        // Bind action handler first
-        viewModel.bindActionHandler { [weak self] action in
-            self?.perform(action: action)
-        }
+        // Wire up the data-driven pipeline
+        let target = DocumentProxyTarget(controller: self)
+        documentProxyTarget = target
+        viewModel.bindTextInputTarget(target)
+        viewModel.bindViewControllerActions(
+            advanceToNextInputMode: { [weak self] in self?.advanceToNextInputMode() },
+            dismissKeyboard: { [weak self] in self?.dismissKeyboard() }
+        )
+
+        // Load the keyboard definition for the selected language
+        let languageId = SharedDefaults.store.string(
+            forKey: SettingsKey.selectedLanguageId.rawValue
+        ) ?? LanguageSettings.detectSystemLanguage()
+        viewModel.loadDefinition(for: languageId)
 
         // Configure hosting synchronously so the SwiftUI view exists
         // before viewWillAppear sets the height constraint. Deferring via
@@ -53,8 +64,12 @@ final class KeyboardViewController: UIInputViewController {
         SharedDefaults.store.set(hasFullAccess, forKey: SettingsKey.keyboardFullAccess.rawValue)
         // Reload settings every time keyboard appears
         viewModel.reloadSettings()
+        // Reload definition if language changed while keyboard was backgrounded
+        let languageId = SharedDefaults.store.string(
+            forKey: SettingsKey.selectedLanguageId.rawValue
+        ) ?? LanguageSettings.detectSystemLanguage()
+        viewModel.loadDefinition(for: languageId)
         updateKeyboardHeight()
-        checkAutoCapitalization()
     }
 
     private func updateKeyboardHeight() {
@@ -77,8 +92,23 @@ final class KeyboardViewController: UIInputViewController {
         super.viewWillLayoutSubviews()
         view.backgroundColor = .clear
         // Update viewModel with current width so SwiftUI re-renders after
-        // orientation changes that happen while the keyboard is backgrounded (Bug #92).
+        // orientation changes that happen while the keyboard is backgrounded.
         viewModel.updateViewWidth(view.bounds.width)
+        viewModel.updateOrientation(isLandscape: detectIsLandscape())
+    }
+
+    /// Determines whether the host app is currently in a landscape orientation.
+    ///
+    /// On iPhone, `verticalSizeClass == .compact` is the canonical signal.
+    /// On iPad, `verticalSizeClass` stays `.regular` in both orientations,
+    /// so we fall back to the window scene's `interfaceOrientation`. The
+    /// keyboard's own bounds are always shorter than tall and cannot be
+    /// used as a substitute.
+    private func detectIsLandscape() -> Bool {
+        if traitCollection.userInterfaceIdiom == .pad {
+            return view.window?.windowScene?.interfaceOrientation.isLandscape ?? false
+        }
+        return traitCollection.verticalSizeClass == .compact
     }
 
     override var needsInputModeSwitchKey: Bool {
@@ -86,8 +116,8 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func configureHosting() {
-        let rootView = KeyboardRootView(viewModel: viewModel)
-        let controller = UIHostingController(rootView: rootView)
+        let rootView = DataDrivenKeyboardRootView(viewModel: viewModel)
+        let controller = UIHostingController(rootView: AnyView(rootView))
         controller.view.translatesAutoresizingMaskIntoConstraints = false
         controller.view.backgroundColor = .clear
 
@@ -98,205 +128,10 @@ final class KeyboardViewController: UIInputViewController {
             controller.view.topAnchor.constraint(equalTo: view.topAnchor),
             controller.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             controller.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            controller.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            controller.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
         controller.didMove(toParent: self)
         hostingController = controller
-    }
-
-    private func perform(action: KeyboardAction) {
-        switch action {
-        case let .insert(text):
-            insertText(text)
-        case .deleteBackward:
-            textDocumentProxy.deleteBackward()
-            updateAutoCapitalization()
-        case .deleteForward:
-            if deleteForward() {
-                updateAutoCapitalization()
-            }
-        case .advanceToNextInputMode:
-            advanceToNextInputMode()
-        case .space:
-            textDocumentProxy.insertText(" ")
-            checkAutoCapitalization()
-        case let .replaceTrailingSpace(text):
-            replaceTrailingSpace(with: text)
-        case .newline:
-            textDocumentProxy.insertText("\n")
-            checkAutoCapitalization()
-        case .dismissKeyboard:
-            dismissKeyboard()
-        case let .capitalizeWord(style):
-            capitalizeCurrentWord(style: style)
-        case let .moveCursor(offset):
-            textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
-        case let .compose(trigger):
-            handleCompose(trigger: trigger)
-        case .cycleAccents:
-            handleCycleAccents()
-        case .copy:
-            handleCopy()
-        case .paste:
-            handlePaste()
-        case .cut:
-            handleCut()
-        case .selectAll:
-            handleSelectAll()
-        }
-    }
-
-    private func insertText(_ text: String) {
-        textDocumentProxy.insertText(text)
-        // Spanish sentence-opening punctuation triggers immediate capitalization
-        if AutoCapitalization.shouldCapitalizeImmediately(after: text),
-           SharedDefaults.store.bool(forKey: SettingsKey.autoCapitalizeEnabled.rawValue) {
-            viewModel.setLayer(.upper)
-        }
-    }
-
-    /// Only replaces the trailing space when the preceding char is a word char,
-    /// so double-taps after existing punctuation fall through to a normal space.
-    private func replaceTrailingSpace(with text: String) {
-        guard let before = textDocumentProxy.documentContextBeforeInput,
-              before.hasSuffix(" ") else {
-            textDocumentProxy.insertText(" ")
-            return
-        }
-        let trimmed = before.dropLast()
-        guard let prior = trimmed.last, prior.isLetter || prior.isNumber else {
-            textDocumentProxy.insertText(" ")
-            return
-        }
-        textDocumentProxy.deleteBackward()
-        textDocumentProxy.insertText(text)
-        updateAutoCapitalization()
-    }
-
-    /// Delete one character after cursor. Returns `true` if a character was deleted.
-    @discardableResult
-    private func deleteForward() -> Bool {
-        guard let after = textDocumentProxy.documentContextAfterInput, !after.isEmpty else {
-            return false
-        }
-        textDocumentProxy.adjustTextPosition(byCharacterOffset: 1)
-        textDocumentProxy.deleteBackward()
-        return true
-    }
-
-    /// Copy selected text to clipboard (requires Full Access)
-    private func handleCopy() {
-        guard hasFullAccess else { return }
-        if let selectedText = textDocumentProxy.selectedText, !selectedText.isEmpty {
-            UIPasteboard.general.string = selectedText
-        }
-    }
-
-    /// Paste text from clipboard (requires Full Access)
-    private func handlePaste() {
-        guard hasFullAccess else { return }
-        if let text = UIPasteboard.general.string, !text.isEmpty {
-            textDocumentProxy.insertText(text)
-            updateAutoCapitalization()
-        }
-    }
-
-    /// Cut selected text (copy + delete, requires Full Access)
-    private func handleCut() {
-        guard hasFullAccess else { return }
-        if let selectedText = textDocumentProxy.selectedText, !selectedText.isEmpty {
-            UIPasteboard.general.string = selectedText
-            textDocumentProxy.deleteBackward()
-            updateAutoCapitalization()
-        }
-    }
-
-    /// Select all text in the current text field
-    private func handleSelectAll() {
-        // Move to the very end of the document
-        while let after = textDocumentProxy.documentContextAfterInput, !after.isEmpty {
-            textDocumentProxy.adjustTextPosition(byCharacterOffset: after.count)
-        }
-        // Select backwards to the very beginning
-        if let before = textDocumentProxy.documentContextBeforeInput {
-            textDocumentProxy.adjustTextPosition(byCharacterOffset: -before.count)
-        }
-    }
-
-    private func checkAutoCapitalization() {
-        // Check if auto-capitalize is enabled
-        guard SharedDefaults.store.bool(forKey: SettingsKey.autoCapitalizeEnabled.rawValue) else { return }
-
-        if AutoCapitalization.shouldCapitalize(context: textDocumentProxy.documentContextBeforeInput) {
-            viewModel.setLayer(.upper)
-        }
-    }
-
-    /// Re-evaluates auto-capitalization after text changes (e.g. delete).
-    /// Enables uppercase if at sentence start, disables it if no longer at sentence start.
-    private func updateAutoCapitalization() {
-        guard SharedDefaults.store.bool(forKey: SettingsKey.autoCapitalizeEnabled.rawValue) else { return }
-
-        let shouldCapitalize = AutoCapitalization.shouldCapitalize(context: textDocumentProxy.documentContextBeforeInput)
-        if shouldCapitalize {
-            viewModel.setLayer(.upper)
-        } else if viewModel.activeLayer == .upper && !viewModel.isCapsLockActive && !viewModel.isManualShift {
-            viewModel.setLayer(.lower)
-        }
-    }
-
-    private func capitalizeCurrentWord(style: CapitalizationStyle) {
-        guard let context = textDocumentProxy.documentContextBeforeInput, !context.isEmpty else { return }
-
-        var characters: [Character] = []
-        for character in context.reversed() {
-            if character.isLetter {
-                characters.append(character)
-            } else {
-                break
-            }
-        }
-
-        guard !characters.isEmpty else { return }
-
-        let word = String(characters.reversed())
-        let locale = viewModel.currentLocale()
-        let transformed: String = switch style {
-        case .uppercased:
-            word.uppercased(with: locale)
-        case .lowercased:
-            word.lowercased(with: locale)
-        }
-
-        for _ in 0 ..< word.count {
-            textDocumentProxy.deleteBackward()
-        }
-        textDocumentProxy.insertText(transformed)
-    }
-
-    private func handleCompose(trigger: String) {
-        guard let previous = textDocumentProxy.documentContextBeforeInput?.last else {
-            textDocumentProxy.insertText(trigger)
-            return
-        }
-
-        if let replacement = ComposeEngine.compose(previous: String(previous), trigger: trigger) {
-            textDocumentProxy.deleteBackward()
-            textDocumentProxy.insertText(replacement)
-        } else {
-            textDocumentProxy.insertText(trigger)
-        }
-    }
-
-    private func handleCycleAccents() {
-        guard let previous = textDocumentProxy.documentContextBeforeInput?.last else {
-            return
-        }
-
-        if let replacement = ComposeEngine.cycleAccent(for: String(previous)) {
-            textDocumentProxy.deleteBackward()
-            textDocumentProxy.insertText(replacement)
-        }
     }
 }

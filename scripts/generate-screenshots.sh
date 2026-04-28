@@ -47,6 +47,40 @@ echo "  Destination: $DESTINATION"
 echo "  Output: $DOCS_DIR"
 echo ""
 
+# Find target simulator UDID by name
+TARGET_UDID=$(xcrun simctl list devices available -j | python3 -c "
+import json, sys
+name = '$DEVICE_NAME'
+devices = json.load(sys.stdin)['devices']
+for runtime_devices in devices.values():
+    for d in runtime_devices:
+        if d.get('name') == name and d.get('isAvailable', True):
+            print(d['udid'])
+            raise SystemExit(0)
+raise SystemExit(1)
+" 2>/dev/null || true)
+
+# Ensure cleanup runs on any exit (normal, error, or signal)
+cleanup() {
+    echo ""
+    echo -e "${BLUE}🧹 Cleaning up...${NC}"
+    if [ -n "$TARGET_UDID" ]; then
+        xcrun simctl status_bar "$TARGET_UDID" clear 2>/dev/null || true
+    fi
+    rm -rf "$DERIVED_DATA"
+}
+trap cleanup EXIT
+
+# Override status bar to get consistent screenshots (Apple's standard 9:41)
+echo -e "${BLUE}⏰ Setting consistent status bar...${NC}"
+if [ -n "$TARGET_UDID" ]; then
+    xcrun simctl status_bar "$TARGET_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
+    echo "  Set status bar to 9:41 on $TARGET_UDID ($DEVICE_NAME)"
+else
+    echo "  ⚠️  Could not find simulator '$DEVICE_NAME', skipping status bar override"
+fi
+echo ""
+
 # Run UI tests to generate screenshots
 echo -e "${BLUE}🧪 Running UI tests to generate screenshots...${NC}"
 
@@ -100,12 +134,94 @@ if [ -f "$TEMP_EXPORT/manifest.json" ]; then
     export DOCS_DIR
     python3 << 'EOF'
 import json
-import subprocess
 import os
+import re
+import numpy as np
 from PIL import Image
 
 manifest_path = os.environ['TEMP_EXPORT'] + '/manifest.json'
 docs_dir = os.environ['DOCS_DIR']
+
+# Screenshots that come from the tab-based app (Home/Test/Settings/Setup) —
+# these include the system status bar (clock!) and the home indicator. We
+# strip fixed top/bottom bands so the current clock time cannot introduce
+# spurious pixel diffs. Ratios are derived from iPhone 16/17 Pro (2622px
+# tall at 3x) but scale with image height so other simulators crop sanely
+# too. The status bar ratio includes safety margin for the Dynamic Island.
+TAB_SCREEN_RE = re.compile(r'-0[1-5]-(home|test-light|test-dark|settings|setup)$')
+STATUS_BAR_RATIO = 210 / 2622
+HOME_INDICATOR_RATIO = 80 / 2622
+
+# Screenshots that come from AppStoreScreenshotView (chat + keyboard). These
+# fill the whole screen and have no visible system status bar, so they must
+# not be cropped — doing so would chop off the chat header.
+APPSTORE_CHAT_RE = re.compile(r'-keyboard-0[1-4]-')
+
+
+def find_runs(mask):
+    diffs = np.diff(mask.astype(np.int8))
+    starts = (np.where(diffs == 1)[0] + 1).tolist()
+    ends = (np.where(diffs == -1)[0] + 1).tolist()
+    if mask[0]:
+        starts.insert(0, 0)
+    if mask[-1]:
+        ends.append(len(mask))
+    return list(zip(starts, ends))
+
+
+def merge_close_runs(runs, gap):
+    if not runs:
+        return []
+    merged = [runs[0]]
+    for start, end in runs[1:]:
+        prev_start, prev_end = merged[-1]
+        if start - prev_end <= gap:
+            merged[-1] = (prev_start, end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def largest_content_block_crop(img, threshold=10, gap=100, padding=10):
+    """Crop to the largest contiguous block of non-background content.
+
+    Unlike a naive first-to-last variance crop, this merges nearby runs and
+    picks the single largest block. This reliably isolates the keyboard grid
+    and ignores the iOS home indicator (a tiny, far-away run) that would
+    otherwise extend the crop across the entire screen.
+    """
+    arr = np.array(img)
+    gray = np.mean(arr, axis=2)
+    row_var = np.var(gray, axis=1)
+    col_var = np.var(gray, axis=0)
+
+    row_runs = merge_close_runs(find_runs(row_var > threshold), gap)
+    col_runs = merge_close_runs(find_runs(col_var > threshold), gap)
+    if not row_runs or not col_runs:
+        return img
+
+    top, bottom = max(row_runs, key=lambda r: r[1] - r[0])
+    left, right = max(col_runs, key=lambda r: r[1] - r[0])
+
+    top = max(0, top - padding)
+    bottom = min(img.height, bottom + padding)
+    left = max(0, left - padding)
+    right = min(img.width, right + padding)
+    return img.crop((left, top, right, bottom))
+
+
+def crop_screenshot(img, base_name):
+    if TAB_SCREEN_RE.search(base_name):
+        # Proportional crop: strip status bar + home indicator.
+        top = min(int(round(img.height * STATUS_BAR_RATIO)), img.height)
+        bottom = max(top, img.height - int(round(img.height * HOME_INDICATOR_RATIO)))
+        return img.crop((0, top, img.width, bottom))
+    if APPSTORE_CHAT_RE.search(base_name):
+        # AppStoreScreenshotView already fills the screen exactly.
+        return img
+    # Keyboard-only showcase: isolate the dense keyboard block.
+    return largest_content_block_crop(img)
+
 
 with open(manifest_path, 'r') as f:
     manifest = json.load(f)
@@ -128,7 +244,6 @@ for test_result in manifest:
         final_webp = os.path.join(docs_dir, f'{base_name}.webp')
 
         if os.path.exists(src_path):
-            # Open image and auto-crop to keyboard
             img = Image.open(src_path)
 
             # Convert to RGB if necessary
@@ -139,28 +254,7 @@ for test_result in manifest:
                 background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
                 img = background
 
-            # Smart crop: find non-background content
-            import numpy as np
-            arr = np.array(img)
-
-            # Find rows and columns that aren't mostly background
-            # Calculate variance across RGB channels - background has low variance
-            gray = np.mean(arr, axis=2)
-            row_variance = np.var(gray, axis=1)
-            col_variance = np.var(gray, axis=0)
-
-            # Find content boundaries (variance above threshold)
-            threshold = 10
-            content_rows = np.where(row_variance > threshold)[0]
-            content_cols = np.where(col_variance > threshold)[0]
-
-            if len(content_rows) > 0 and len(content_cols) > 0:
-                top = max(0, content_rows[0] - 10)
-                bottom = min(img.height, content_rows[-1] + 10)
-                left = max(0, content_cols[0] - 10)
-                right = min(img.width, content_cols[-1] + 10)
-
-                img = img.crop((left, top, right, bottom))
+            img = crop_screenshot(img, base_name)
 
             # Save as WebP with good quality
             img.save(final_webp, 'WEBP', quality=85)
@@ -192,9 +286,5 @@ else
   echo "  - Verify Pillow is installed: pip3 install Pillow"
   echo "  - Run tests manually: xcodebuild test -scheme $SCHEME -destination '$DESTINATION' -only-testing:$TEST_TARGET"
 fi
-
-echo ""
-echo -e "${BLUE}🧹 Cleaning up...${NC}"
-rm -rf "$DERIVED_DATA"
 
 echo -e "${GREEN}✨ Done!${NC}"

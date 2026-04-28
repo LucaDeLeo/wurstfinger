@@ -31,14 +31,14 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.numpadStyle.rawValue, store: SharedDefaults.store)
     private var numpadStyleRaw = NumpadStyle.phone.rawValue
 
+    @AppStorage(SettingsKey.cursorMovementStyle.rawValue, store: SharedDefaults.store)
+    private var cursorMovementStyleRaw = CursorMovementStyle.continuous.rawValue
+
     @AppStorage(SettingsKey.keyboardStyle.rawValue, store: SharedDefaults.store)
     private var keyboardStyleRaw = KeyboardStyle.classic.rawValue
 
     @AppStorage(SettingsKey.autoCapitalizeEnabled.rawValue, store: SharedDefaults.store)
     private var autoCapitalizeEnabled = false
-
-    @AppStorage(SettingsKey.doubleTapSpaceAction.rawValue, store: SharedDefaults.store)
-    private var doubleTapSpaceActionRaw = DoubleTapSpaceAction.default.rawValue
 
     private let licenseURL = URL(string: "https://github.com/cl445/wurstfinger/blob/main/LICENSE")!
 
@@ -82,28 +82,18 @@ struct SettingsView: View {
                 )
             }
 
-            Picker(selection: $doubleTapSpaceActionRaw) {
-                Text("Off").tag(DoubleTapSpaceAction.off.rawValue)
-                Text("Comma (, )").tag(DoubleTapSpaceAction.comma.rawValue)
-                Text("Period (. )").tag(DoubleTapSpaceAction.period.rawValue)
+            Picker(selection: $cursorMovementStyleRaw) {
+                Text("Continuous").tag(CursorMovementStyle.continuous.rawValue)
+                Text("Step-by-step").tag(CursorMovementStyle.discrete.rawValue)
             } label: {
                 SettingsRow(
-                    icon: "space",
-                    color: .blue,
-                    title: "Double-Tap Space",
-                    subtitle: doubleTapSpaceDescription
+                    icon: "cursor.rays", color: .green,
+                    title: "Cursor Movement",
+                    subtitle: cursorMovementStyleDescription
                 )
             }
         } header: {
             Text("General")
-        }
-    }
-
-    private var doubleTapSpaceDescription: String {
-        switch DoubleTapSpaceAction(rawValue: doubleTapSpaceActionRaw) ?? .default {
-        case .off:    "Disabled"
-        case .comma:  "Inserts ', ' on quick double-tap"
-        case .period: "Inserts '. ' on quick double-tap"
         }
     }
 
@@ -153,9 +143,6 @@ struct SettingsView: View {
         }
     }
 
-    @AppStorage(SettingsKey.keyModificationsParsed.rawValue, store: SharedDefaults.store)
-    private var keyModificationsParsedData: Data?
-
     private var expertSection: some View {
         Section {
             NavigationLink(destination: ExpertSettingsView()) {
@@ -164,15 +151,6 @@ struct SettingsView: View {
                     color: .orange,
                     title: "Expert",
                     subtitle: expertModeEnabled ? "Gesture tuning enabled" : "Advanced gesture settings"
-                )
-            }
-
-            NavigationLink(destination: ThumbKeyImportView()) {
-                SettingsRow(
-                    icon: "square.and.arrow.down",
-                    color: .purple,
-                    title: "Import Layout",
-                    subtitle: keyModificationsParsedData != nil ? "Custom layout active" : "Paste thumb-key YAML"
                 )
             }
         } header: {
@@ -229,6 +207,16 @@ struct SettingsView: View {
     private var keyboardStyleDescription: String {
         let style = KeyboardStyle(rawValue: keyboardStyleRaw) ?? .classic
         return style.displayName
+    }
+
+    private var cursorMovementStyleDescription: String {
+        let style = CursorMovementStyle(rawValue: cursorMovementStyleRaw) ?? .continuous
+        switch style {
+        case .continuous:
+            return "Drag to move cursor"
+        case .discrete:
+            return "Swipe per character, return-swipe per word"
+        }
     }
 
     private var numpadStyleDescription: String {
