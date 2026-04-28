@@ -13,9 +13,16 @@ extension KeyboardViewModel {
     // MARK: - Data-Driven Loading & Pipeline
 
     /// Loads a keyboard definition by ID from the registry and sets up the
-    /// resolver chain and action pipeline.
+    /// resolver chain and action pipeline. If the user has saved a thumb-key
+    /// override, applies it to the definition's letter modes before use.
     func loadDefinition(for id: String) {
-        guard let definition = KeyboardRegistry.load(id: id) else { return }
+        guard let base = KeyboardRegistry.load(id: id) else { return }
+        let definition: KeyboardDefinition
+        if let override = ThumbKeyOverride.load(from: sharedDefaults) {
+            definition = base.applying(override)
+        } else {
+            definition = base
+        }
         currentDefinition = definition
         activeModeName = definition.defaultMode
         pipelineLocale = definition.locale

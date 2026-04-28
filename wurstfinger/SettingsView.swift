@@ -143,6 +143,9 @@ struct SettingsView: View {
         }
     }
 
+    @AppStorage(SettingsKey.keyModificationsParsed.rawValue, store: SharedDefaults.store)
+    private var keyModificationsParsedData: Data?
+
     private var expertSection: some View {
         Section {
             NavigationLink(destination: ExpertSettingsView()) {
@@ -151,6 +154,15 @@ struct SettingsView: View {
                     color: .orange,
                     title: "Expert",
                     subtitle: expertModeEnabled ? "Gesture tuning enabled" : "Advanced gesture settings"
+                )
+            }
+
+            NavigationLink(destination: ThumbKeyImportView()) {
+                SettingsRow(
+                    icon: "square.and.arrow.down",
+                    color: .purple,
+                    title: "Import Layout",
+                    subtitle: keyModificationsParsedData != nil ? "Custom layout active" : "Paste thumb-key YAML"
                 )
             }
         } header: {

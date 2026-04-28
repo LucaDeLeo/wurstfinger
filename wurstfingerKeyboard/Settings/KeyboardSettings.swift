@@ -29,6 +29,8 @@ enum SettingsKey: String {
     case keyboardStyle
     case keyboardFullAccess
     case cursorMovementStyle
+    case keyModificationsYAML
+    case keyModificationsParsed
 }
 
 // MARK: - Haptic Settings
