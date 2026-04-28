@@ -43,8 +43,19 @@ struct AdvancedTextMiddleware: ActionMiddleware {
             handlePaste(target: target)
         case .cut:
             handleCut(target: target)
+        case .selectAll:
+            handleSelectAll(target: target)
         default:
             break
+        }
+    }
+
+    private func handleSelectAll(target: TextInputTarget) {
+        while let after = target.documentContextAfterInput, !after.isEmpty {
+            target.adjustTextPosition(byCharacterOffset: after.count)
+        }
+        if let before = target.documentContextBeforeInput, !before.isEmpty {
+            target.adjustTextPosition(byCharacterOffset: -before.count)
         }
     }
 

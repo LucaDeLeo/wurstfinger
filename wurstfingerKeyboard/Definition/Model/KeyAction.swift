@@ -49,6 +49,10 @@ enum KeyAction: Codable, Equatable {
     /// Clipboard
     case copy, paste, cut
 
+    /// Select all text (best-effort: jumps cursor to start of document since
+    /// `UITextDocumentProxy` does not expose programmatic selection).
+    case selectAll
+
     /// No action (empty slot)
     case none
 }

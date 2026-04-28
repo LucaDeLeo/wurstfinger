@@ -52,12 +52,20 @@ class LanguageSettings: ObservableObject {
                 return match.id
             }
 
-            // Try language-only match (e.g., any German variant for "de")
-            if let match = LanguageConfig.allLanguages.first(where: {
+            // Try language-only match. Prefer canonical layouts whose id
+            // matches `{lang}_{REGION}` (e.g. "en_US") so newly added
+            // multi-script layouts (e.g. an English grid with Spanish
+            // letters, id "en_thumbkey_es") don't displace the default.
+            let candidates = LanguageConfig.allLanguages.filter {
                 $0.locale.language.languageCode?.identifier == language
-            }) {
-                return match.id
             }
+            let canonical = candidates.first { config in
+                let parts = config.id.split(separator: "_")
+                return parts.count == 2 && parts[0] == language && parts[1].count == 2
+                    && parts[1].allSatisfy { $0.isUppercase }
+            }
+            if let canonical { return canonical.id }
+            if let firstAny = candidates.first { return firstAny.id }
         }
 
         // Fallback to English

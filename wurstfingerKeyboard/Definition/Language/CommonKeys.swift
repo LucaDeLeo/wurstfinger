@@ -60,6 +60,10 @@ enum CommonKeys {
             label: "", action: .paste, category: .utility,
             returnAction: nil, accessibilityLabel: "Einsetzen"
         ),
+        .swipeLeft: KeyBinding(
+            label: "", action: .selectAll, category: .utility,
+            returnAction: nil, accessibilityLabel: "Alles auswählen"
+        ),
     ]
 
     static let symbols = KeyConfig.utility(

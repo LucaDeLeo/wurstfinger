@@ -440,7 +440,7 @@ enum LanguageDefinitions {
     static let enThumbKeySpanish = GridKeyboardFactory.layout(
         id: "en_thumbkey_es",
         title: "ENThumbKey + Español",
-        localeIdentifier: "es_ES",
+        localeIdentifier: "en_US",
         centerCharacters: [
             ["s", "r", "o"],
             ["n", "h", "a"],

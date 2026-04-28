@@ -38,6 +38,7 @@ extension KeyAction {
              .advanceToNextInputMode, .dismissKeyboard:
             return .utility
         case .copy, .paste, .cut: return .utility
+        case .selectAll: return .utility
         case .none: return .utility
         }
     }
