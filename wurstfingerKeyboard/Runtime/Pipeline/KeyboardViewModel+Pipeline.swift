@@ -250,8 +250,25 @@ extension KeyboardViewModel {
     // MARK: - Gesture Dispatch
 
     /// Central entry point for the data-driven gesture path.
-    func handleGesture(_ gesture: GestureType, keyId: String, isReturn: Bool) {
+    ///
+    /// - Parameters:
+    ///   - touchdown: the touchdown normalized to the key's frame (`[0,1]²`),
+    ///     plumbed for offset learning (§4.1). `nil` from callers that don't
+    ///     supply it (tests, internal slide-driven taps). Consumed in P5.
+    ///   - features: discriminating gesture features for telemetry (§13).
+    func handleGesture(
+        _ gesture: GestureType,
+        keyId: String,
+        isReturn: Bool,
+        touchdown: CGPoint? = nil,
+        features: GestureFeatures? = nil
+    ) {
         guard let mode = activeModeFromDefinition else { return }
+
+        // P5: forward (keyId, gesture, isReturn, touchdown, features) to the
+        // touch-learning middleware here once it exists. For now the data is
+        // plumbed end-to-end but not yet consumed.
+        _ = (touchdown, features)
 
         // Circular gestures: try requested direction, fall back to opposite.
         if gesture == .circularClockwise || gesture == .circularCounterclockwise {
