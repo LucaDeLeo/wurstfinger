@@ -36,6 +36,12 @@ enum SettingsKey: String {
     case hideLetters
     case hideStandardSymbols
     case hideExtraSymbols
+    /// Master toggle for the learned touch-offset correction feature (default off).
+    /// See `docs/touch-offset-correction.md` §6.1.
+    case touchOffsetEnabled
+    /// Schema version of the persisted touch-offset model; bump invalidates
+    /// incompatible stored state. See §7.
+    case touchModelSchemaVersion
 }
 
 // MARK: - Haptic Settings
