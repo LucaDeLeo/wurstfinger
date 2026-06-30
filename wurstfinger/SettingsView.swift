@@ -40,6 +40,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.autoCapitalizeEnabled.rawValue, store: SharedDefaults.store)
     private var autoCapitalizeEnabled = false
 
+    @AppStorage(SettingsKey.touchOffsetEnabled.rawValue, store: SharedDefaults.store)
+    private var touchOffsetEnabled = false
+
     private let licenseURL = URL(string: "https://github.com/cl445/wurstfinger/blob/main/LICENSE")!
 
     @AppStorage(SettingsKey.expertModeEnabled.rawValue, store: SharedDefaults.store)
@@ -134,6 +137,15 @@ struct SettingsView: View {
                     color: .green,
                     title: "Size & Position",
                     subtitle: sizePositionDescription
+                )
+            }
+
+            NavigationLink(destination: TouchOffsetSettingsView()) {
+                SettingsRow(
+                    icon: "scope",
+                    color: .red,
+                    title: "Touch Correction",
+                    subtitle: touchOffsetEnabled ? "Learning your taps" : "Adapt targets to your taps"
                 )
             }
 
