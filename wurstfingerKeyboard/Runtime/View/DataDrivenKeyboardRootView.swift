@@ -53,7 +53,12 @@ struct DataDrivenKeyboardRootView: View {
                         viewModel.handleSlide(key, phase: phase)
                     },
                     languageLabel: viewModel.currentLanguageLabel,
-                    showLanguageLabel: viewModel.hasMultipleLanguages
+                    showLanguageLabel: viewModel.hasMultipleLanguages,
+                    offsets: viewModel.currentTouchCorrectionOffsets(),
+                    // The grid receives this width as its layout bounds (the
+                    // outer frame minus the horizontal padding) — used for the
+                    // visible Key-Target-Resizing compensation (§5.5).
+                    availableWidth: scaledWidth - 2 * KeyboardConstants.Layout.horizontalPadding
                 )
                 .padding(.horizontal, KeyboardConstants.Layout.horizontalPadding)
                 .padding(.top, KeyboardConstants.Layout.verticalPaddingTop)
