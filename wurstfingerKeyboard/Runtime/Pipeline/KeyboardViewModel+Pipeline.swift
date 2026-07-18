@@ -16,19 +16,61 @@ extension KeyboardViewModel {
     /// resolver chain and action pipeline. If the user has saved a thumb-key
     /// override, applies it to the definition's letter modes before use.
     func loadDefinition(for id: String) {
-        guard let base = KeyboardRegistry.load(id: id) else { return }
-        let definition: KeyboardDefinition
+        // Fall back to English if the requested language can't be resolved (e.g.
+        // a stale stored id for a language removed in a later version) so the
+        // keyboard always renders a layout instead of coming up blank.
+        guard let base = KeyboardRegistry.load(id: id)
+            ?? KeyboardRegistry.load(id: LanguageConfig.english.id)
+        else { return }
+        var definition = applyNumpadStyle(to: base)
         if let override = ThumbKeyOverride.load(from: sharedDefaults) {
-            definition = base.applying(override)
-        } else {
-            definition = base
+            definition = definition.applying(override)
         }
         currentDefinition = definition
+        // Record the signature of what was actually loaded (the id may differ
+        // from the requested one after the English fallback) so the controller
+        // can skip redundant rebuilds on the next appearance.
+        loadedDefinitionSignature = Self.definitionSignature(
+            languageId: definition.id,
+            numpadStyle: sharedDefaults.string(forKey: SettingsKey.numpadStyle.rawValue),
+            thumbKeyOverride: sharedDefaults.data(
+                forKey: SettingsKey.keyModificationsParsed.rawValue
+            )
+        )
         activeModeName = definition.defaultMode
         pipelineLocale = definition.locale
         currentMode = definition.mode(activeModeName)
         rebuildResolverChain()
         rebuildPipeline()
+    }
+
+    /// Signature of the inputs that determine a loaded definition (language +
+    /// numpad style). Pure so the desync-free comparison between the
+    /// controller's desired inputs and the view model's loaded state can be
+    /// unit-tested without a UIKit lifecycle.
+    static func definitionSignature(
+        languageId: String,
+        numpadStyle: String?,
+        thumbKeyOverride: Data? = nil
+    ) -> String {
+        // Data.hashValue is seeded per process, which is sufficient here: the
+        // signature is only ever compared against one recorded in the same
+        // process, never persisted.
+        "\(languageId)|\(numpadStyle ?? "")|\(thumbKeyOverride?.hashValue ?? 0)"
+    }
+
+    /// Swaps the numeric layer to the classic (7-8-9) ordering when the user
+    /// selected it. The registry caches the phone-style definition, so this
+    /// always derives from the canonical phone layout and never mutates the cache.
+    private func applyNumpadStyle(to definition: KeyboardDefinition) -> KeyboardDefinition {
+        let raw = sharedDefaults.string(forKey: SettingsKey.numpadStyle.rawValue)
+        let style = raw.flatMap(NumpadStyle.init(rawValue:)) ?? .phone
+        guard style == .classic else { return definition }
+        let classicNumeric = NumericLayouts.classic(
+            digits: definition.numericDigits,
+            backToAlphaLabel: definition.numericBackToAlphaLabel
+        )
+        return definition.replacingMode(ModeNames.numeric, with: classicNumeric)
     }
 
     /// Injects the text input target (typically a `DocumentProxyTarget`).
@@ -73,18 +115,25 @@ extension KeyboardViewModel {
         }
         var middlewares: [ActionMiddleware] = []
 
-        // 1. Haptic feedback
-        middlewares.append(HapticMiddleware(trigger: { [weak self] _ in
-            self?.triggerHapticTap()
+        // 1. Haptic feedback — confirmation ticks for state-changing actions
+        //    only. The per-keystroke tap haptic fires once at touch-down in
+        //    the view layer (`feedbackTap`) and slide steps trigger their own
+        //    drag haptic, so text actions MUST stay silent here: a per-action
+        //    haptic buzzed every key press and slide step a second time.
+        middlewares.append(HapticMiddleware(trigger: { [weak self] action in
+            self?.triggerHaptic(for: action)
         }))
 
-        // 2. Compose + Cycle Accents
+        // 2. Compose + Cycle Accents — per-definition engine so language-specific
+        // compose rule overrides are honored (rebuilt on every definition load).
+        let composeEngine = definition.settings.composeRuleOverrides
+            .map { ComposeEngine.withGlobalRules(overrides: $0) } ?? .shared
         middlewares.append(ComposeMiddleware(
             compose: { previous, trigger in
-                ComposeEngine.compose(previous: previous, trigger: trigger)
+                composeEngine.compose(previous: previous, trigger: trigger)
             },
             cycleAccent: { character in
-                ComposeEngine.cycleAccent(for: character)
+                composeEngine.cycleAccent(for: character)
             },
             previousCharacter: { [weak self] in
                 self?.textInputTarget?.documentContextBeforeInput?.last.map(String.init) ?? ""
@@ -112,10 +161,36 @@ extension KeyboardViewModel {
             }
         ))
 
-        // 4. Advanced text (delete-forward, capitalize, clipboard)
+        // 3b. Combine (sequential base+mark→combined). Two flavours share the
+        //     same middleware: a static rule table (Devanagari vowel lengthening,
+        //     Japanese kana voicing) or the algorithmic Korean Hangul automaton.
+        //     Inert unless the definition opts into one.
+        let combineRuleSet = definition.settings.combineRuleSet
+        let combinesHangul = inputMethod == .hangul
+        middlewares.append(CombineMiddleware(
+            isActive: { combineRuleSet != nil || combinesHangul },
+            documentContextBefore: { [weak self] in
+                self?.textInputTarget?.documentContextBeforeInput
+            },
+            deleteBackward: { [weak self] in
+                self?.textInputTarget?.deleteBackward()
+            },
+            combine: { previous, trigger in
+                if combinesHangul {
+                    return HangulComposer.combine(previous: previous, jamo: trigger)
+                }
+                return combineRuleSet?.rules[trigger]?[previous]
+            }
+        ))
+
+        // 4. Advanced text (delete-forward, capitalize, clipboard). The
+        //    clipboard confirmation tick fires from the middleware's success
+        //    paths (not upfront in the haptic middleware) so guarded no-ops
+        //    stay silent.
         middlewares.append(AdvancedTextMiddleware(
             target: { [weak self] in self?.textInputTarget },
-            locale: { [weak self] in self?.pipelineLocale ?? Locale.current }
+            locale: { [weak self] in self?.pipelineLocale ?? Locale.current },
+            onClipboardSuccess: { [weak self] in self?.feedbackStateChange() }
         ))
 
         // 5. Double-tap space → punctuation (must run before TextInputMiddleware
@@ -146,22 +221,17 @@ extension KeyboardViewModel {
 
         // 7. Auto-capitalization
         middlewares.append(AutoCapitalizationMiddleware(
-            evaluate: { [weak self] in
-                guard let self,
-                      sharedDefaults.bool(forKey: SettingsKey.autoCapitalizeEnabled.rawValue)
-                else { return nil }
-                return AutoCapitalization.shouldCapitalize(
-                    context: textInputTarget?.documentContextBeforeInput
-                )
-            },
-            onCapitalize: { [weak self] in
-                self?.switchToMode(ModeNames.shifted)
-            },
+            evaluate: { [weak self] in self?.evaluateAutoCapitalization() },
+            onCapitalize: { [weak self] in self?.engageAutoCapitalization() },
             onReleaseCapitalize: { [weak self] in
-                guard let self else { return }
-                if activeModeName == ModeNames.shifted {
-                    switchToMode(ModeNames.main)
-                }
+                // Mirror `refreshAutoCapitalization`: only an *auto-engaged*
+                // shift may be released when the context stops calling for
+                // capitalization. A manually tapped shift is one-shot and is
+                // consumed exclusively by letters (via the shifted mode's
+                // auto-transition) — never dropped by delete, symbols,
+                // paste, or cut — matching iOS system shift behavior.
+                guard let self, shiftEngagedByAutoCapitalization else { return }
+                releaseAutoCapitalization()
             }
         ))
 
@@ -176,24 +246,104 @@ extension KeyboardViewModel {
         pipeline = ActionPipeline(middlewares: middlewares)
     }
 
+    // MARK: - Auto-Capitalization
+
+    /// Re-evaluates auto-capitalization outside the key-action pipeline.
+    /// Called from `KeyboardViewController` when the host text changes
+    /// (keyboard appearance, field switch, caret relocation) so the shift
+    /// state matches the new context. Idempotent: `switchToMode` ignores
+    /// same-mode switches, so overlapping calls (e.g. `viewWillAppear` and
+    /// `textDidChange` both firing on appearance) are harmless.
+    func refreshAutoCapitalization() {
+        switch evaluateAutoCapitalization() {
+        case .some(true):
+            engageAutoCapitalization()
+        case .some(false):
+            // Outside the key pipeline only an *auto-engaged* shift may be
+            // released — a manually tapped shift must survive textDidChange
+            // firing for caret moves or field switches.
+            if shiftEngagedByAutoCapitalization {
+                releaseAutoCapitalization()
+            }
+        case .none:
+            break
+        }
+    }
+
+    /// Returns whether the next key should be capitalized, or `nil` when
+    /// auto-capitalization is inactive — either the definition does not
+    /// support it for this language or the user disabled it in settings.
+    func evaluateAutoCapitalization() -> Bool? {
+        guard currentDefinition?.settings.autoCapitalize == true,
+              sharedDefaults.bool(forKey: SettingsKey.autoCapitalizeEnabled.rawValue)
+        else { return nil }
+        let context = textInputTarget?.documentContextBeforeInput
+        // Sentence-opening punctuation (Spanish ¿/¡) capitalizes the letter
+        // that immediately follows it, matching iOS system keyboards.
+        if let last = context?.last,
+           AutoCapitalization.shouldCapitalizeImmediately(after: String(last)) {
+            return true
+        }
+        return AutoCapitalization.shouldCapitalize(context: context)
+    }
+
+    /// Engages the shifted layer for the next key. Only fires from `main`:
+    /// caps lock must survive sentence enders, and the numeric/symbol
+    /// layers must not be hijacked into the letter layers.
+    func engageAutoCapitalization() {
+        guard activeModeName == ModeNames.main else { return }
+        switchToMode(ModeNames.shifted)
+        shiftEngagedByAutoCapitalization = activeModeName == ModeNames.shifted
+    }
+
+    /// Releases a pending auto-shift. Only fires from `shifted` so caps
+    /// lock and non-letter layers are never demoted.
+    func releaseAutoCapitalization() {
+        guard activeModeName == ModeNames.shifted else { return }
+        switchToMode(ModeNames.main)
+    }
+
     // MARK: - Gesture Dispatch
 
     /// Central entry point for the data-driven gesture path.
-    func handleGesture(_ gesture: GestureType, keyId: String, isReturn: Bool) {
-        guard let mode = activeModeFromDefinition else { return }
+    ///
+    /// Returns whether the gesture resolved to a binding and was dispatched.
+    /// The long-press path uses this to decide whether the touch is consumed:
+    /// a key without a long-press binding (e.g. return, globe) must keep its
+    /// normal tap on release instead of being swallowed by the failed hold.
+    @discardableResult
+    func handleGesture(_ gesture: GestureType, keyId: String, isReturn: Bool) -> Bool {
+        guard let mode = activeModeFromDefinition else { return false }
 
         // Circular gestures: try requested direction, fall back to opposite.
         if gesture == .circularClockwise || gesture == .circularCounterclockwise {
             handleCircular(keyId: keyId, in: mode, gesture: gesture)
-            return
+            return true
         }
 
         let chain = isReturn ? returnSwipeResolverChain : resolverChain
-        guard let binding = chain?.resolve(keyId: keyId, gesture: gesture, in: mode) else { return }
+        guard let binding = chain?.resolve(keyId: keyId, gesture: gesture, in: mode) else { return false }
 
+        // Mode and language switches bypass the pipeline, so their
+        // confirmation tick fires here instead of in the haptic middleware —
+        // but only when the switch actually changed something (same-mode
+        // taps and single-language globe swipes are silent no-ops).
         if case let .switchMode(targetMode) = binding.action {
+            let previousMode = activeModeName
             handleSwitchMode(targetMode)
-            return
+            if activeModeName != previousMode {
+                feedbackStateChange()
+            }
+            return true
+        }
+
+        if case .switchToNextLanguage = binding.action {
+            let previousLanguage = currentDefinition?.id
+            switchToNextLanguage()
+            if currentDefinition?.id != previousLanguage {
+                feedbackStateChange()
+            }
+            return true
         }
 
         let context = ActionContext(
@@ -202,6 +352,7 @@ extension KeyboardViewModel {
             mode: activeModeName
         )
         pipeline?.process(context)
+        return true
     }
 
     /// Handles a circular gesture. Checks for an explicit binding first
@@ -234,7 +385,10 @@ extension KeyboardViewModel {
               text.first?.isLetter == true
         else { return false }
         let locale = pipelineLocale ?? Locale.current
-        let uppercased = text.uppercased(with: locale)
+        // keyboardUppercased (not plain uppercased) keeps ß → ẞ as a single
+        // character, matching the shifted-layer generation in the definition
+        // layer — a layout with ß on a tap position must not expand to "SS".
+        let uppercased = text.keyboardUppercased(with: locale)
         dispatchAction(.commitText(uppercased))
         return true
     }
@@ -252,6 +406,18 @@ extension KeyboardViewModel {
         else { return }
         activeModeName = modeName
         currentMode = definition.mode(modeName)
+        // Any mode change invalidates a pending auto-shift; the auto-cap
+        // engage path re-sets the flag right after switching.
+        shiftEngagedByAutoCapitalization = false
+    }
+
+    /// Resets the active mode to the definition's default. Called by the
+    /// controller on appearance so a keyboard hidden on the numeric or
+    /// shifted layer reopens on letters. No-op (and publish-free) when the
+    /// default mode is already active.
+    func resetToDefaultMode() {
+        guard let definition = currentDefinition else { return }
+        switchToMode(definition.defaultMode)
     }
 
     // MARK: - Slide Gesture Handling
@@ -268,31 +434,168 @@ extension KeyboardViewModel {
         }
     }
 
+    /// Cursor-movement style for the space-bar drag. Read per gesture (stable
+    /// for the duration of a drag); defaults to `.continuous`.
+    var cursorMovementStyle: CursorMovementStyle {
+        let raw = sharedDefaults.string(forKey: SettingsKey.cursorMovementStyle.rawValue)
+        return raw.flatMap(CursorMovementStyle.init(rawValue:)) ?? .continuous
+    }
+
     func handleSpaceSlide(phase: SlidePhase, key: KeyConfig) {
         switch phase {
         case .began:
             isSpaceDragging = true
             spaceDragResidual = 0
             doubleTapSpaceMiddleware?.cancelPendingTap()
+            spaceDragPeak = 0
+            // Snapshot the style once so a mid-drag settings change can't switch
+            // this gesture between discrete and continuous classification.
+            spaceDragCursorStyle = cursorMovementStyle
         case let .changed(deltaX):
             guard isSpaceDragging, deltaX != 0 else { return }
             spaceDragResidual += deltaX
-            while spaceDragResidual <= -KeyboardConstants.SpaceGestures.dragStep {
-                dispatchAction(.moveCursor(offset: -1))
-                feedbackDrag()
-                spaceDragResidual += KeyboardConstants.SpaceGestures.dragStep
-            }
-            while spaceDragResidual >= KeyboardConstants.SpaceGestures.dragStep {
-                dispatchAction(.moveCursor(offset: 1))
-                feedbackDrag()
-                spaceDragResidual -= KeyboardConstants.SpaceGestures.dragStep
+            if spaceDragCursorStyle == .discrete {
+                // Track the peak; movement is deferred to `.ended` so the whole
+                // swipe counts as a single discrete step.
+                if abs(spaceDragResidual) > abs(spaceDragPeak) {
+                    spaceDragPeak = spaceDragResidual
+                }
+            } else {
+                stepContinuousCursor()
             }
         case .ended:
+            if spaceDragCursorStyle == .discrete {
+                finishDiscreteSpaceSlide()
+            }
             isSpaceDragging = false
             spaceDragResidual = 0
+            spaceDragPeak = 0
+        case .cancelled:
+            // System cancelled the touches mid-drag: discard the drag state
+            // without committing a discrete move or a tap.
+            isSpaceDragging = false
+            spaceDragResidual = 0
+            spaceDragPeak = 0
         case .tap:
             handleGesture(.tap, keyId: key.id, isReturn: false)
+        case let .swipeUp(isReturn):
+            // Only reported when the horizontal slide never activated, so
+            // this cannot interfere with cursor movement in either style.
+            toggleLabelVisibility(grouped: isReturn)
         }
+    }
+
+    /// MessagEase space-bar label toggles. A plain up-swipe flips the
+    /// extra-symbol labels; a return-up swipe (`grouped`) toggles letter and
+    /// standard-symbol labels together: only when both are hidden does it
+    /// show them again, otherwise it hides both.
+    private func toggleLabelVisibility(grouped: Bool) {
+        if grouped {
+            let hidden = sharedDefaults.bool(forKey: SettingsKey.hideLetters.rawValue)
+                && sharedDefaults.bool(forKey: SettingsKey.hideStandardSymbols.rawValue)
+            sharedDefaults.set(!hidden, forKey: SettingsKey.hideLetters.rawValue)
+            sharedDefaults.set(!hidden, forKey: SettingsKey.hideStandardSymbols.rawValue)
+        } else {
+            let hidden = sharedDefaults.bool(forKey: SettingsKey.hideExtraSymbols.rawValue)
+            sharedDefaults.set(!hidden, forKey: SettingsKey.hideExtraSymbols.rawValue)
+        }
+        // Confirmation tick, not a second tap impact: the touch-down already
+        // fired the tap haptic, and the toggle is a state change like a
+        // mode switch.
+        feedbackStateChange()
+    }
+
+    /// Continuous (joystick) mode: emit one character move per `dragStep` of
+    /// accumulated travel.
+    private func stepContinuousCursor() {
+        while spaceDragResidual <= -KeyboardConstants.SpaceGestures.dragStep {
+            dispatchAction(.moveCursor(offset: singleGraphemeOffset(direction: -1)))
+            feedbackDrag()
+            spaceDragResidual += KeyboardConstants.SpaceGestures.dragStep
+        }
+        while spaceDragResidual >= KeyboardConstants.SpaceGestures.dragStep {
+            dispatchAction(.moveCursor(offset: singleGraphemeOffset(direction: 1)))
+            feedbackDrag()
+            spaceDragResidual -= KeyboardConstants.SpaceGestures.dragStep
+        }
+    }
+
+    /// UTF-16 offset that moves the cursor across exactly one grapheme cluster
+    /// in `direction` (+1 forward, -1 backward).
+    ///
+    /// `adjustTextPosition(byCharacterOffset:)` moves by UTF-16 code units, so
+    /// multi-unit clusters (emoji, surrogate pairs, ZWJ sequences) need their
+    /// full UTF-16 width; otherwise the caret lands inside the cluster. Falls
+    /// back to 1 when no document context is available.
+    private func singleGraphemeOffset(direction: Int) -> Int {
+        let cluster: Character? = direction > 0
+            ? textInputTarget?.documentContextAfterInput?.first
+            : textInputTarget?.documentContextBeforeInput?.last
+        return direction * (cluster?.utf16.count ?? 1)
+    }
+
+    /// Discrete (MessagEase) mode: classify the completed swipe.
+    /// A regular swipe moves one character; a return swipe (finger returns
+    /// toward the origin) moves one whole word in the swipe's direction.
+    private func finishDiscreteSpaceSlide() {
+        let peak = spaceDragPeak
+        let finalX = spaceDragResidual
+        // Ignore taps / tiny jitters that never travelled a full step.
+        guard abs(peak) >= KeyboardConstants.SpaceGestures.dragStep else { return }
+
+        let direction = peak < 0 ? -1 : 1
+        let ratio = abs(finalX) / abs(peak)
+        if ratio < KeyboardConstants.SpaceGestures.returnSwipeThreshold {
+            moveCursorByWord(direction: direction)
+        } else {
+            dispatchAction(.moveCursor(offset: singleGraphemeOffset(direction: direction)))
+        }
+        feedbackDrag()
+    }
+
+    /// Moves the cursor by one word in `direction` (+1 forward, -1 backward)
+    /// by computing the UTF-16 offset to the nearest word boundary from the
+    /// surrounding document context.
+    private func moveCursorByWord(direction: Int) {
+        let offset: Int = direction > 0
+            ? Self.forwardWordOffset(in: textInputTarget?.documentContextAfterInput ?? "")
+            : -Self.backwardWordOffset(in: textInputTarget?.documentContextBeforeInput ?? "")
+        guard offset != 0 else { return }
+        dispatchAction(.moveCursor(offset: offset))
+    }
+
+    /// UTF-16 code units from the cursor to the end of the next word: skip
+    /// leading whitespace, then the word itself. Iterates graphemes but sums
+    /// their UTF-16 widths, matching `adjustTextPosition`'s unit.
+    static func forwardWordOffset(in text: String) -> Int {
+        var count = 0
+        var seenWord = false
+        for char in text {
+            if char.isWhitespace {
+                if seenWord { break }
+            } else {
+                seenWord = true
+            }
+            count += char.utf16.count
+        }
+        return count
+    }
+
+    /// UTF-16 code units from the cursor back to the start of the previous
+    /// word: skip trailing whitespace, then the word itself. Iterates graphemes
+    /// but sums their UTF-16 widths, matching `adjustTextPosition`'s unit.
+    static func backwardWordOffset(in text: String) -> Int {
+        var count = 0
+        var seenWord = false
+        for char in text.reversed() {
+            if char.isWhitespace {
+                if seenWord { break }
+            } else {
+                seenWord = true
+            }
+            count += char.utf16.count
+        }
+        return count
     }
 
     func handleDeleteSlide(phase: SlidePhase, key: KeyConfig) {
@@ -303,21 +606,26 @@ extension KeyboardViewModel {
         case let .changed(deltaX):
             guard isDeleteDragging, deltaX != 0 else { return }
             deleteDragResidual += deltaX
-            while deleteDragResidual <= -KeyboardConstants.SpaceGestures.dragStep {
+            let step = KeyboardConstants.DeleteGestures.dragStep
+            while deleteDragResidual <= -step {
                 dispatchAction(.deleteBackward)
                 feedbackDrag()
-                deleteDragResidual += KeyboardConstants.SpaceGestures.dragStep
+                deleteDragResidual += step
             }
-            while deleteDragResidual >= KeyboardConstants.SpaceGestures.dragStep {
+            while deleteDragResidual >= step {
                 dispatchAction(.deleteForward)
                 feedbackDrag()
-                deleteDragResidual -= KeyboardConstants.SpaceGestures.dragStep
+                deleteDragResidual -= step
             }
-        case .ended:
+        case .ended, .cancelled:
             isDeleteDragging = false
             deleteDragResidual = 0
         case .tap:
             handleGesture(.tap, keyId: key.id, isReturn: false)
+        case .swipeUp:
+            // The delete key has no vertical gestures; label toggles are a
+            // space-bar feature. Vertical flicks stay ignored.
+            break
         }
     }
 

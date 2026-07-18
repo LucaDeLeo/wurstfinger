@@ -44,7 +44,7 @@ struct AutoCapitalizationMiddleware: ActionMiddleware {
              .compose, .cycleAccents, .paste, .cut:
             true
         case .moveCursor, .switchMode, .capitalizeWord, .advanceToNextInputMode,
-             .dismissKeyboard, .copy, .selectAll, .none:
+             .dismissKeyboard, .copy, .selectAll, .none, .switchToNextLanguage:
             false
         }
     }

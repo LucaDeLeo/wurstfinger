@@ -14,10 +14,13 @@ enum CommonKeys {
 
     static let globe: KeyConfig = {
         var bindings: [GestureType: KeyBinding] = [:]
+        // Tap is intentionally inert: switching the input method lives on the
+        // swipe-left gesture below. The empty `.none` slot keeps the key's
+        // accessibility label without re-triggering the globe on a plain tap.
         bindings[.tap] = KeyBinding(
-            label: "", action: .advanceToNextInputMode,
+            label: "", action: .none,
             category: .utility, returnAction: nil,
-            accessibilityLabel: "Tastatur wechseln"
+            accessibilityLabel: String(localized: "Switch keyboard")
         )
         bindings[.swipeLeft] = KeyBinding(
             label: "", action: .advanceToNextInputMode,
@@ -26,7 +29,11 @@ enum CommonKeys {
         bindings[.swipeDown] = KeyBinding(
             label: "", action: .dismissKeyboard,
             category: .utility, returnAction: nil,
-            accessibilityLabel: "Tastatur ausblenden"
+            accessibilityLabel: String(localized: "Hide keyboard")
+        )
+        bindings[.swipeRight] = KeyBinding(
+            label: "", action: .switchToNextLanguage,
+            category: .utility, returnAction: nil, accessibilityLabel: nil
         )
         return KeyConfig(
             id: UtilitySlot.globe, bindings: bindings,
@@ -38,27 +45,27 @@ enum CommonKeys {
     static let delete = KeyConfig.utility(
         UtilitySlot.delete, label: "⌫", action: .deleteBackward,
         swipeMode: .twoWayHorizontal, slideType: .delete,
-        accessibilityLabel: "Löschen"
+        accessibilityLabel: String(localized: "Delete")
     )
 
     static let `return` = KeyConfig.utility(
         UtilitySlot.return, label: "↵", action: .newline,
-        accessibilityLabel: "Zeilenumbruch"
+        accessibilityLabel: String(localized: "New line")
     )
 
     /// Clipboard swipe bindings shared between the symbols key and numeric back-to-main key.
     static let clipboardSwipes: [GestureType: KeyBinding] = [
         .swipeUp: KeyBinding(
             label: "", action: .copy, category: .utility,
-            returnAction: nil, accessibilityLabel: "Kopieren"
+            returnAction: nil, accessibilityLabel: String(localized: "Copy")
         ),
         .swipeUpRight: KeyBinding(
             label: "", action: .cut, category: .utility,
-            returnAction: nil, accessibilityLabel: "Ausschneiden"
+            returnAction: nil, accessibilityLabel: String(localized: "Cut")
         ),
         .swipeDown: KeyBinding(
             label: "", action: .paste, category: .utility,
-            returnAction: nil, accessibilityLabel: "Einsetzen"
+            returnAction: nil, accessibilityLabel: String(localized: "Paste")
         ),
         .swipeLeft: KeyBinding(
             label: "", action: .selectAll, category: .utility,
@@ -77,7 +84,15 @@ enum CommonKeys {
         bindings: [
             .tap: KeyBinding(
                 label: "␣", action: .space, category: .utility,
-                returnAction: nil, accessibilityLabel: "Leerzeichen"
+                returnAction: nil, accessibilityLabel: String(localized: "Space")
+            ),
+            // The hold-for-digit feature pairs 0 with the space bar (no
+            // letter-layer slot maps to 0 otherwise). Long presses
+            // only occur with the opt-in setting enabled, so this is inert by
+            // default; .longPress has no hint alignment, so nothing renders.
+            .longPress: KeyBinding(
+                label: "0", action: .commitText("0"),
+                category: .digit, returnAction: nil, accessibilityLabel: nil
             ),
         ],
         swipeMode: .none,
@@ -244,7 +259,7 @@ enum CommonKeys {
                 returnAction: .commitText("˝"), accessibilityLabel: nil
             ),
             .swipeRight: KeyBinding(
-                label: "*", action: .compose(trigger: "*"), category: .compose,
+                label: "*", action: .commitText("*"), category: nil,
                 returnAction: .commitText("†"), accessibilityLabel: nil
             ),
             .swipeDownRight: KeyBinding(

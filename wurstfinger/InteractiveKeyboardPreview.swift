@@ -43,35 +43,30 @@ private class PreviewTextTarget: TextInputTarget, ObservableObject {
 
 struct InteractiveKeyboardPreview: View {
     @Binding var aspectRatio: Double
-    @Binding var scale: Double
+    /// Keyboard width wish in points (mirrors the persisted setting).
+    @Binding var width: Double
     @Binding var position: Double
 
     @StateObject private var previewViewModel = KeyboardViewModel(shouldPersistSettings: false)
     @StateObject private var previewTarget = PreviewTextTarget()
 
     init(
-        aspectRatio: Binding<Double> = .constant(1.5),
-        scale: Binding<Double> = .constant(1.0),
+        aspectRatio: Binding<Double> = .constant(1.0),
+        width: Binding<Double> = .constant(DeviceLayoutUtils.defaultKeyboardWidth),
         position: Binding<Double> = .constant(0.5)
     ) {
         _aspectRatio = aspectRatio
-        _scale = scale
+        _width = width
         _position = position
     }
 
     private var previewHeight: CGFloat {
-        // Calculate preview height based on aspect ratio and scale
-        let baseHeight = KeyboardConstants.Calculations.baseHeight(aspectRatio: previewViewModel.keyAspectRatio)
-        let scaledHeight = baseHeight * scale
-
-        // Determine height constraints based on usage
-        if scale < 0.99 {
-            return min(KeyboardConstants.Preview.maxHeight, max(KeyboardConstants.Preview.minHeight, scaledHeight))
-        } else {
-            let keyHeight = 54.0 * (1.5 / aspectRatio)
-            let totalHeight = (keyHeight * 4) + (8 * 3) + (10 * 2)
-            return min(400, max(200, totalHeight))
-        }
+        // Same metrics the keyboard itself renders from, resolved against
+        // the preview's container (the parents inset it 16 pt per side), so
+        // the frame height always matches the rendered content height.
+        let containerWidth = DeviceLayoutUtils.screenBounds.width - 32
+        let metrics = previewViewModel.layoutMetrics(forContainerWidth: containerWidth)
+        return min(KeyboardConstants.Preview.maxHeight, max(KeyboardConstants.Preview.minHeight, metrics.totalHeight))
     }
 
     var body: some View {
@@ -106,24 +101,26 @@ struct InteractiveKeyboardPreview: View {
                     .cornerRadius(8)
             }
 
-            GeometryReader { _ in
+            GeometryReader { proxy in
                 ZStack(alignment: .top) {
                     Color(.systemGray6)
 
-                    DataDrivenKeyboardRootView(viewModel: previewViewModel)
-
+                    // The proxy width makes the preview lay out against its
+                    // real container instead of the full screen width, so the
+                    // fit-clamp and horizontal position match the extension.
+                    DataDrivenKeyboardRootView(viewModel: previewViewModel, overrideWidth: proxy.size.width)
                         .onChange(of: aspectRatio) { _, newValue in
                             previewViewModel.keyAspectRatio = newValue
                         }
-                        .onChange(of: scale) { _, newValue in
-                            previewViewModel.keyboardScale = newValue
+                        .onChange(of: width) { _, newValue in
+                            previewViewModel.keyboardWidth = newValue
                         }
                         .onChange(of: position) { _, newValue in
                             previewViewModel.keyboardHorizontalPosition = newValue
                         }
                         .onAppear {
                             previewViewModel.keyAspectRatio = aspectRatio
-                            previewViewModel.keyboardScale = scale
+                            previewViewModel.keyboardWidth = width
                             previewViewModel.keyboardHorizontalPosition = position
 
                             // Wire up preview text target and load definition
@@ -138,7 +135,7 @@ struct InteractiveKeyboardPreview: View {
             .frame(height: previewHeight)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .animation(.easeInOut(duration: 0.2), value: aspectRatio)
-            .animation(.easeInOut(duration: 0.2), value: scale)
+            .animation(.easeInOut(duration: 0.2), value: width)
             .animation(.easeInOut(duration: 0.2), value: position)
         }
     }

@@ -37,10 +37,31 @@ jobs:
           pip install --upgrade pip
           pip install Pillow numpy
 
+      # The image default (Xcode 16.4 on macos-15) ships an older simulator
+      # set; select the newest installed Xcode 26 to match local development.
+      - name: Select Xcode 26
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "::error::No Xcode 26 installation found on the runner image"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+
+      # Warm-boot only: the script detects and boots its own simulator, so a
+      # missing preferred device must not fail the job (this step used to
+      # hard-fail on an empty UDID when the hardcoded device was absent).
       - name: Boot iOS Simulator
         run: |
-          # Get device UDID
-          DEVICE_UDID=$(xcrun simctl list devices available | grep "iPhone 16 Pro" | head -n 1 | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
+          DEVICE_UDID=$(xcrun simctl list devices available | grep -E "iPhone" | grep -v "SE" | head -n 1 | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' || true)
+          if [ -z "$DEVICE_UDID" ]; then
+            echo "No iPhone simulator found to warm-boot; the script will handle device selection"
+            xcrun simctl list devices available
+            exit 0
+          fi
           echo "Booting simulator: $DEVICE_UDID"
           xcrun simctl boot "$DEVICE_UDID" 2>/dev/null || true
           # Wait for simulator to be ready
@@ -134,24 +155,35 @@ jobs:
               f.write(f"changed={'true' if changed else 'false'}\n")
           PYEOF
 
-      - name: Create PR with screenshots
+      - name: Create or update PR with screenshots
         if: steps.check_changes.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Create a new branch for the PR
-          BRANCH_NAME="automated/update-screenshots-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH_NAME"
+          BASE_BRANCH="${{ github.ref_name }}"
+          # Stable branch name per base so repeated runs reuse one PR
+          # instead of piling up duplicate screenshot PRs.
+          BRANCH_NAME="automated/update-screenshots-${BASE_BRANCH}"
 
+          # The branch always holds exactly "base + one screenshot commit".
+          # Recreating it from the current base commit and force-pushing keeps
+          # an existing PR up to date without checkout conflicts against the
+          # freshly generated (uncommitted) screenshots in the working tree.
+          git checkout -B "$BRANCH_NAME"
           git add -A docs/images/
           git commit -m "Update screenshots"
-          git push -u origin "$BRANCH_NAME"
+          git push -f -u origin "$BRANCH_NAME"
 
-          # Create PR
-          gh pr create \
-            --title "Update screenshots" \
-            --body "Automated screenshot update from CI workflow." \
-            --base "${{ github.ref_name }}"
+          # Open a PR only if none is already tracking this branch
+          EXISTING_PR=$(gh pr list --state open --head "$BRANCH_NAME" --base "$BASE_BRANCH" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Updated existing PR #${EXISTING_PR}"
+          else
+            gh pr create \
+              --title "Update screenshots" \
+              --body "Automated screenshot update from CI workflow." \
+              --base "$BASE_BRANCH"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

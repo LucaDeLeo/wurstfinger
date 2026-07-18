@@ -82,6 +82,91 @@ struct GesturePreprocessorTests {
         #expect(!filtered.contains(CGPoint(x: 100, y: 0)))
     }
 
+    @Test func outlierFilterRemovesTrailingGlitchPoint() {
+        let config = GesturePreprocessorConfig(
+            jitterThreshold: 3.0,
+            maxJumpDistance: 30.0,
+            smoothingWindow: 5,
+            smoothingOrder: 2,
+            aspectRatio: 1.0
+        )
+        let preprocessor = GesturePreprocessor(config: config)
+
+        // A glitch as the final sample has no raw successor and must
+        // still be removed.
+        let points: [CGPoint] = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 10, y: 0),
+            CGPoint(x: 20, y: 0),
+            CGPoint(x: 150, y: 0) // trailing outlier: jump of 130pt
+        ]
+
+        let filtered = preprocessor.filterOutliers(points)
+
+        #expect(filtered == Array(points.prefix(3)))
+    }
+
+    @Test func outlierFilterKeepsTailAfterDroppedFrameGap() {
+        let config = GesturePreprocessorConfig.default // maxJumpDistance = 50
+        let preprocessor = GesturePreprocessor(config: config)
+
+        // A dropped frame under main-thread load creates one inter-sample
+        // gap > maxJumpDistance in a genuine fast swipe. The points after
+        // the gap are mutually consistent and must not cascade away.
+        let points: [CGPoint] = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 10, y: 0),
+            CGPoint(x: 20, y: 0),
+            CGPoint(x: 80, y: 0), // 60pt gap: dropped frame, real motion
+            CGPoint(x: 95, y: 0)
+        ]
+
+        let filtered = preprocessor.filterOutliers(points)
+
+        #expect(filtered == points)
+    }
+
+    @Test func outlierFilterRemovesClusteredGlitchPair() {
+        let config = GesturePreprocessorConfig.default // maxJumpDistance = 50
+        let preprocessor = GesturePreprocessor(config: config)
+
+        // Two mutually close ghost points far from the path must not admit
+        // each other via raw-neighbor support: the run is short (2) and the
+        // cluster sits beyond the 3x plausibility ceiling.
+        let points: [CGPoint] = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 10, y: 0),
+            CGPoint(x: 200, y: 5), // ghost pair, ~190pt off the path
+            CGPoint(x: 205, y: 0),
+            CGPoint(x: 20, y: 0), // real motion resumes
+            CGPoint(x: 30, y: 0)
+        ]
+
+        let filtered = preprocessor.filterOutliers(points)
+
+        #expect(filtered == [points[0], points[1], points[4], points[5]])
+    }
+
+    @Test func outlierFilterKeepsSustainedFarRun() {
+        let config = GesturePreprocessorConfig.default // maxJumpDistance = 50
+        let preprocessor = GesturePreprocessor(config: config)
+
+        // A run of >= 3 mutually consistent samples beyond the ceiling is
+        // sustained real motion (re-anchored long drag), not a ghost cluster.
+        let points: [CGPoint] = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 10, y: 0),
+            CGPoint(x: 200, y: 0), // far window, but the motion continues
+            CGPoint(x: 210, y: 0),
+            CGPoint(x: 220, y: 0),
+            CGPoint(x: 230, y: 0)
+        ]
+
+        let filtered = preprocessor.filterOutliers(points)
+
+        #expect(filtered == points)
+    }
+
     // MARK: - Aspect Ratio Normalization Tests
 
     @Test func aspectRatioNormalizationDividesX() {
@@ -393,5 +478,97 @@ struct GestureFeaturesTests {
         #expect(features.pathSeparation > 0.5)
         #expect(features.isCircular)
         #expect(features.isClockwise) // CCW in math = positive angularSpan
+    }
+}
+
+// MARK: - Expert Mode Gating Tests
+
+/// Custom `gesture.*` values must only govern gesture recognition while
+/// expert mode is enabled. When the user turns expert mode off (the obvious
+/// recovery action after breaking gesture recognition), the defaults apply
+/// again — but the stored values survive so re-enabling restores them.
+struct ExpertModeGatingTests {
+    private func storeWithCustomValues(expertModeEnabled: Bool) -> InMemoryUserDefaults {
+        let store = InMemoryUserDefaults()
+        store.set(expertModeEnabled, forKey: SettingsKey.expertModeEnabled.rawValue)
+        store.set(9.0, forKey: GesturePreprocessorConfig.jitterThresholdKey)
+        store.set(120.0, forKey: GesturePreprocessorConfig.maxJumpDistanceKey)
+        store.set(7, forKey: GesturePreprocessorConfig.smoothingWindowKey)
+        store.set(42.0, forKey: GestureClassificationThresholds.minSwipeLengthKey)
+        store.set(0.9, forKey: GestureClassificationThresholds.maxReturnRatioKey)
+        store.set(0.75, forKey: GestureClassificationThresholds.minCircularityKey)
+        return store
+    }
+
+    @Test func configIgnoresCustomValuesWhenExpertModeIsOff() {
+        let store = storeWithCustomValues(expertModeEnabled: false)
+
+        let config = GesturePreprocessorConfig.fromUserDefaults(store: store)
+
+        #expect(config.jitterThreshold == GesturePreprocessorConfig.defaultJitterThreshold)
+        #expect(config.maxJumpDistance == GesturePreprocessorConfig.defaultMaxJumpDistance)
+        #expect(config.smoothingWindow == GesturePreprocessorConfig.defaultSmoothingWindow)
+    }
+
+    @Test func configAppliesCustomValuesWhenExpertModeIsOn() {
+        let store = storeWithCustomValues(expertModeEnabled: true)
+
+        let config = GesturePreprocessorConfig.fromUserDefaults(store: store)
+
+        #expect(config.jitterThreshold == 9.0)
+        #expect(config.maxJumpDistance == 120.0)
+        #expect(config.smoothingWindow == 7)
+    }
+
+    @Test func configIgnoresCustomValuesWhenExpertModeKeyIsMissing() {
+        let store = storeWithCustomValues(expertModeEnabled: false)
+        store.removeObject(forKey: SettingsKey.expertModeEnabled.rawValue)
+
+        let config = GesturePreprocessorConfig.fromUserDefaults(store: store)
+
+        #expect(config.jitterThreshold == GesturePreprocessorConfig.defaultJitterThreshold)
+    }
+
+    @Test func thresholdsIgnoreCustomValuesWhenExpertModeIsOff() {
+        let store = storeWithCustomValues(expertModeEnabled: false)
+
+        let thresholds = GestureClassificationThresholds.fromUserDefaults(store: store)
+
+        #expect(thresholds.minSwipeLength == GestureClassificationThresholds.defaultMinSwipeLength)
+        #expect(thresholds.maxReturnRatio == GestureClassificationThresholds.defaultMaxReturnRatio)
+        #expect(thresholds.minCircularity == GestureClassificationThresholds.defaultMinCircularity)
+    }
+
+    @Test func thresholdsApplyCustomValuesWhenExpertModeIsOn() {
+        let store = storeWithCustomValues(expertModeEnabled: true)
+
+        let thresholds = GestureClassificationThresholds.fromUserDefaults(store: store)
+
+        #expect(thresholds.minSwipeLength == 42.0)
+        #expect(thresholds.maxReturnRatio == 0.9)
+        #expect(thresholds.minCircularity == 0.75)
+    }
+
+    @Test func customValuesSurviveExpertModeRoundTrip() {
+        let store = storeWithCustomValues(expertModeEnabled: true)
+
+        store.set(false, forKey: SettingsKey.expertModeEnabled.rawValue)
+        #expect(GestureClassificationThresholds.fromUserDefaults(store: store).minSwipeLength
+            == GestureClassificationThresholds.defaultMinSwipeLength)
+
+        store.set(true, forKey: SettingsKey.expertModeEnabled.rawValue)
+        #expect(GestureClassificationThresholds.fromUserDefaults(store: store).minSwipeLength == 42.0)
+    }
+
+    @Test func configValuesSurviveExpertModeRoundTrip() {
+        let store = storeWithCustomValues(expertModeEnabled: true)
+
+        store.set(false, forKey: SettingsKey.expertModeEnabled.rawValue)
+        #expect(GesturePreprocessorConfig.fromUserDefaults(store: store).jitterThreshold
+            == GesturePreprocessorConfig.defaultJitterThreshold)
+
+        store.set(true, forKey: SettingsKey.expertModeEnabled.rawValue)
+        #expect(GesturePreprocessorConfig.fromUserDefaults(store: store).jitterThreshold == 9.0)
+        #expect(GesturePreprocessorConfig.fromUserDefaults(store: store).maxJumpDistance == 120.0)
     }
 }

@@ -50,7 +50,7 @@ struct TextInputMiddleware: ActionMiddleware {
             target.adjustTextPosition(byCharacterOffset: offset)
         case .compose, .cycleAccents, .switchMode, .capitalizeWord,
              .advanceToNextInputMode, .dismissKeyboard, .deleteForward,
-             .copy, .paste, .cut, .selectAll, .none:
+             .copy, .paste, .cut, .selectAll, .none, .switchToNextLanguage:
             break
         }
     }

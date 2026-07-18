@@ -33,9 +33,54 @@ struct KeyboardDefinition: Codable, Equatable {
     /// Keyboard-specific settings
     let settings: KeyboardDefinitionSettings
 
+    /// Label for the numeric layer's "back to alphabet" key (e.g. "abc",
+    /// "אבג", "абв"). Retained on the definition so the numeric mode can be
+    /// rebuilt at load time (e.g. when switching the numpad style) without
+    /// re-deriving the per-language label.
+    let numericBackToAlphaLabel: String
+
+    /// Digit set (indexed by value 0–9) for the numeric layer. Retained on the
+    /// definition — like `numericBackToAlphaLabel` — so a numpad-style swap
+    /// rebuilds the numeric mode with the correct script digits instead of
+    /// falling back to Western ASCII. Defaults to `NumericLayouts.westernDigits`.
+    let numericDigits: [String]
+
+    init(
+        title: String,
+        id: String,
+        localeIdentifier: String,
+        modes: [String: KeyboardMode],
+        defaultMode: String,
+        settings: KeyboardDefinitionSettings,
+        numericBackToAlphaLabel: String = NumericLayouts.defaultBackToAlphaLabel,
+        numericDigits: [String] = NumericLayouts.westernDigits
+    ) {
+        self.title = title
+        self.id = id
+        self.localeIdentifier = localeIdentifier
+        self.modes = modes
+        self.defaultMode = defaultMode
+        self.settings = settings
+        self.numericBackToAlphaLabel = numericBackToAlphaLabel
+        self.numericDigits = numericDigits
+    }
+
     /// Convenience: Mode lookup
     func mode(_ name: String) -> KeyboardMode? {
         modes[name]
+    }
+
+    /// Returns a copy with `name`'s mode replaced. Used to swap the numeric
+    /// layer (phone/classic) at load time based on user settings.
+    func replacingMode(_ name: String, with mode: KeyboardMode) -> KeyboardDefinition {
+        var updated = modes
+        updated[name] = mode
+        return KeyboardDefinition(
+            title: title, id: id, localeIdentifier: localeIdentifier,
+            modes: updated, defaultMode: defaultMode, settings: settings,
+            numericBackToAlphaLabel: numericBackToAlphaLabel,
+            numericDigits: numericDigits
+        )
     }
 }
 
@@ -62,6 +107,10 @@ enum InputMethodKind: String, Codable, Equatable {
     /// Vietnamese Telex: single-char and digraph lookback composition
     /// handled by `TelexMiddleware`.
     case telex
+
+    /// Korean Hangul: jamo → syllable composition handled by
+    /// `CombineMiddleware` driven by the `HangulComposer` automaton.
+    case hangul
 }
 
 /// Keyboard-specific settings for a KeyboardDefinition.
@@ -69,11 +118,10 @@ struct KeyboardDefinitionSettings: Codable, Equatable {
     /// Auto-capitalization enabled
     let autoCapitalize: Bool
 
-    /// Language-specific auto-capitalizer rules (e.g. "i" → "I" in English)
-    let autoCapitalizers: [AutoCapitalizerRule]
-
     /// Language-specific compose rule overrides.
-    /// Merged with global base rules at runtime.
+    /// Merged with global base rules at runtime: an override wins over the
+    /// global rule for the same trigger + base character; all other global
+    /// rules stay available.
     /// nil = only use global rules (sufficient for most languages).
     let composeRuleOverrides: ComposeRuleSet?
 
@@ -81,24 +129,23 @@ struct KeyboardDefinitionSettings: Codable, Equatable {
     /// `.direct`; set to `.telex` for Vietnamese Telex composition.
     let inputMethod: InputMethodKind
 
+    /// Sequential-combine rules (`trigger → base → result`) applied by
+    /// `CombineMiddleware`: when the just-typed character (`trigger`) follows a
+    /// matching `base` already in the document, both collapse to `result`.
+    /// Used by scripts that build characters from a base plus a following mark
+    /// — Devanagari vowel lengthening (इ + इ → ई), Japanese kana voicing.
+    /// nil = no sequential combine (the default for most languages).
+    let combineRuleSet: ComposeRuleSet?
+
     init(
         autoCapitalize: Bool,
-        autoCapitalizers: [AutoCapitalizerRule],
         composeRuleOverrides: ComposeRuleSet?,
-        inputMethod: InputMethodKind = .direct
+        inputMethod: InputMethodKind = .direct,
+        combineRuleSet: ComposeRuleSet? = nil
     ) {
         self.autoCapitalize = autoCapitalize
-        self.autoCapitalizers = autoCapitalizers
         self.composeRuleOverrides = composeRuleOverrides
         self.inputMethod = inputMethod
+        self.combineRuleSet = combineRuleSet
     }
-}
-
-/// A rule for automatic capitalization.
-struct AutoCapitalizerRule: Codable, Equatable {
-    /// Pattern recognized in text before cursor
-    let pattern: String
-
-    /// Replacement
-    let replacement: String
 }

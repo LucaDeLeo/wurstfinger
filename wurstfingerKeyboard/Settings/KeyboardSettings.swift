@@ -17,13 +17,22 @@ import Foundation
 enum SettingsKey: String {
     case hapticIntensityTap
     case hapticIntensityDrag
+    /// Legacy master toggle — only read to migrate an explicit "off" into
+    /// intensity 0, then removed.
     case hapticEnabled
     case utilityColumnLeading
     case keyAspectRatio
+    /// Legacy fraction-of-screen-width size. Read once to migrate into
+    /// `keyboardWidthPoints`; the stored value is kept for downgrade safety
+    /// but no longer consulted afterwards.
     case keyboardScale
+    /// Keyboard width wish in points (density- and orientation-independent).
+    case keyboardWidthPoints
     case keyboardHorizontalPosition
     case numpadStyle
     case selectedLanguageId
+    case enabledLanguageIds
+    case pinnedLanguageId
     case autoCapitalizeEnabled
     case expertModeEnabled
     case keyboardStyle
@@ -32,6 +41,12 @@ enum SettingsKey: String {
     case keyModificationsYAML
     case keyModificationsParsed
     case doubleTapSpaceAction
+    case hideLetters
+    case hideStandardSymbols
+    case hideExtraSymbols
+    /// Holding a letter key types the digit that key carries on the
+    /// numeric layer, without switching modes.
+    case longPressNumbersEnabled
 }
 
 /// Replacement to insert when the user double-taps the space bar within
@@ -60,16 +75,16 @@ enum DoubleTapSpaceAction: String, Codable, CaseIterable {
 /// Encapsulates all haptic-related settings with built-in persistence.
 /// Eliminates duplicate didSet handlers by using a unified approach.
 final class HapticSettings: ObservableObject {
-    /// Default intensity values (0.0 - 1.0)
-    static let defaultTapIntensity: CGFloat = 0.5
-    static let defaultDragIntensity: CGFloat = 0.5
+    /// Default intensity values (0.0 - 1.0). Both map to a discrete
+    /// `HapticIntensityLevel`; level `.off` (intensity 0) disables the
+    /// respective feedback, so there is no separate master switch.
+    /// Defaults mirror the iOS system keyboard's subtle feel: a soft tap
+    /// per keystroke, detent ticks for drags.
+    static let defaultTapIntensity: CGFloat = HapticIntensityLevel.soft.storedIntensity
+    static let defaultDragIntensity: CGFloat = HapticIntensityLevel.tick.storedIntensity
 
     private let defaults: UserDefaults
     private let shouldPersist: Bool
-
-    @Published var enabled: Bool {
-        didSet { persistIfNeeded(enabled, forKey: .hapticEnabled) }
-    }
 
     @Published var tapIntensity: CGFloat {
         didSet {
@@ -98,16 +113,27 @@ final class HapticSettings: ObservableObject {
         self.shouldPersist = shouldPersist
 
         // Load values with clamping
-        enabled = defaults.object(forKey: SettingsKey.hapticEnabled.rawValue) as? Bool ?? true
         tapIntensity = Self.loadIntensity(from: defaults, key: .hapticIntensityTap, default: Self.defaultTapIntensity)
         dragIntensity = Self.loadIntensity(from: defaults, key: .hapticIntensityDrag, default: Self.defaultDragIntensity)
+
+        // Migrate the removed master toggle: an explicit "off" becomes level
+        // `.off` on both sliders, so users who had haptics disabled stay
+        // silent after the update.
+        if defaults.object(forKey: SettingsKey.hapticEnabled.rawValue) as? Bool == false {
+            tapIntensity = 0
+            dragIntensity = 0
+            if shouldPersist {
+                defaults.set(0.0, forKey: SettingsKey.hapticIntensityTap.rawValue)
+                defaults.set(0.0, forKey: SettingsKey.hapticIntensityDrag.rawValue)
+            }
+        }
+        if shouldPersist {
+            defaults.removeObject(forKey: SettingsKey.hapticEnabled.rawValue)
+        }
     }
 
     /// Reload settings from UserDefaults (e.g., after changes from host app)
     func reload() {
-        let newEnabled = defaults.object(forKey: SettingsKey.hapticEnabled.rawValue) as? Bool ?? true
-        if enabled != newEnabled { enabled = newEnabled }
-
         let newTap = Self.loadIntensity(from: defaults, key: .hapticIntensityTap, default: Self.defaultTapIntensity)
         if abs(tapIntensity - newTap) > 0.0001 { tapIntensity = newTap }
 
@@ -118,7 +144,7 @@ final class HapticSettings: ObservableObject {
     /// Returns the intensity for a given haptic event type
     func intensity(for event: KeyboardHapticEvent) -> CGFloat {
         switch event {
-        case .tap: tapIntensity
+        case .tap, .stateChange: tapIntensity
         case .drag: dragIntensity
         }
     }
@@ -153,7 +179,7 @@ final class LayoutSettings: ObservableObject {
         didSet { persistIfNeeded(utilityColumnLeading, forKey: .utilityColumnLeading) }
     }
 
-    /// Key aspect ratio (height/width). Range: 1.0 (square) to 1.62 (golden ratio)
+    /// Key aspect ratio (width/height). Range: 1.0 (square) to 1.62 (golden ratio)
     @Published var keyAspectRatio: Double {
         didSet {
             let clamped = Self.clampAspectRatio(keyAspectRatio)
@@ -165,15 +191,19 @@ final class LayoutSettings: ObservableObject {
         }
     }
 
-    /// Keyboard scale relative to screen width. Range: 0.25 to 1.0
-    @Published var keyboardScale: Double {
+    /// Keyboard width wish in points. Range: 90 to 600.
+    ///
+    /// This is the *wish*: what the user asked for, independent of device
+    /// and orientation. The rendered *result* may be smaller (fit-clamped by
+    /// `KeyboardLayoutMetrics.resolve`), but the clamp is never written back.
+    @Published var keyboardWidth: Double {
         didSet {
-            let clamped = Self.clampScale(keyboardScale)
-            if clamped != keyboardScale {
-                keyboardScale = clamped
+            let clamped = Self.clampWidth(keyboardWidth)
+            if clamped != keyboardWidth {
+                keyboardWidth = clamped
                 return
             }
-            persistIfNeeded(clamped, forKey: .keyboardScale)
+            persistIfNeeded(clamped, forKey: .keyboardWidthPoints)
         }
     }
 
@@ -199,9 +229,7 @@ final class LayoutSettings: ObservableObject {
             ?? DeviceLayoutUtils.defaultKeyAspectRatio
         keyAspectRatio = Self.clampAspectRatio(savedRatio)
 
-        let savedScale = defaults.object(forKey: SettingsKey.keyboardScale.rawValue) as? Double
-            ?? DeviceLayoutUtils.defaultKeyboardScale
-        keyboardScale = Self.clampScale(savedScale)
+        keyboardWidth = Self.loadWishWidth(from: defaults, shouldPersist: shouldPersist)
 
         let savedPosition = defaults.object(forKey: SettingsKey.keyboardHorizontalPosition.rawValue) as? Double
             ?? DeviceLayoutUtils.defaultKeyboardPosition
@@ -218,15 +246,66 @@ final class LayoutSettings: ObservableObject {
         let newRatio = Self.clampAspectRatio(savedRatio)
         if keyAspectRatio != newRatio { keyAspectRatio = newRatio }
 
-        let savedScale = defaults.object(forKey: SettingsKey.keyboardScale.rawValue) as? Double
-            ?? DeviceLayoutUtils.defaultKeyboardScale
-        let newScale = Self.clampScale(savedScale)
-        if keyboardScale != newScale { keyboardScale = newScale }
+        let newWidth = Self.loadWishWidth(from: defaults, shouldPersist: shouldPersist)
+        if keyboardWidth != newWidth { keyboardWidth = newWidth }
 
         let savedPosition = defaults.object(forKey: SettingsKey.keyboardHorizontalPosition.rawValue) as? Double
             ?? DeviceLayoutUtils.defaultKeyboardPosition
         let newPosition = Self.clampPosition(savedPosition)
         if keyboardHorizontalPosition != newPosition { keyboardHorizontalPosition = newPosition }
+    }
+
+    // MARK: - Layout Metrics
+
+    /// Resolves the persisted wish (width + aspect ratio) into concrete
+    /// metrics for a render context. Pure: fit-clamps shrink the result but
+    /// never write back to the store.
+    func resolveMetrics(columns: Int, availableWidth: CGFloat, screenHeight: CGFloat) -> KeyboardLayoutMetrics {
+        KeyboardLayoutMetrics.resolve(
+            wishWidth: keyboardWidth,
+            aspectRatio: keyAspectRatio,
+            columns: columns,
+            availableWidth: availableWidth,
+            screenHeight: screenHeight
+        )
+    }
+
+    // MARK: - Migration
+
+    /// Performs the one-time legacy `keyboardScale` → `keyboardWidthPoints`
+    /// migration without constructing a settings instance. The host app calls
+    /// this at launch **before** registering defaults (a registered width
+    /// would make the key appear present and mask a pending migration); the
+    /// extension migrates in `init`/`reload`.
+    static func migrateLegacyScaleIfNeeded(in defaults: UserDefaults) {
+        _ = loadWishWidth(from: defaults, shouldPersist: true)
+    }
+
+    /// Loads the wish width, migrating a legacy `keyboardScale` exactly once.
+    ///
+    /// - A stored `keyboardWidthPoints` always wins (clamped on load).
+    /// - Otherwise a user-persisted legacy scale (fraction of screen width)
+    ///   is converted against the orientation-stable shortest screen side —
+    ///   on iPhone this preserves the rendered width existing users see —
+    ///   and persisted once. The legacy key stays in the store for downgrade
+    ///   safety; it is simply no longer read afterwards.
+    /// - With neither present, the device-class default applies and is NOT
+    ///   persisted (fallback only, like the other layout defaults).
+    private static func loadWishWidth(from defaults: UserDefaults, shouldPersist: Bool) -> Double {
+        if let stored = defaults.object(forKey: SettingsKey.keyboardWidthPoints.rawValue) as? Double {
+            return clampWidth(stored)
+        }
+        if let legacyScale = defaults.object(forKey: SettingsKey.keyboardScale.rawValue) as? Double {
+            let bounds = DeviceLayoutUtils.screenBounds
+            let shortestSide = min(bounds.width, bounds.height)
+            let clampedScale = min(1.0, max(0.25, legacyScale))
+            let width = clampWidth(clampedScale * shortestSide)
+            if shouldPersist {
+                defaults.set(width, forKey: SettingsKey.keyboardWidthPoints.rawValue)
+            }
+            return width
+        }
+        return DeviceLayoutUtils.defaultKeyboardWidth
     }
 
     // MARK: - Private Helpers
@@ -236,9 +315,10 @@ final class LayoutSettings: ObservableObject {
         min(1.62, max(1.0, value))
     }
 
-    /// Scale range: 0.25 (iPad minimum) to 1.0 (full width)
-    private static func clampScale(_ value: Double) -> Double {
-        min(1.0, max(0.25, value))
+    /// Wish-width range in points: 90 (below the old 0.25×iPhone-mini
+    /// minimum) to 600 (beyond any full iPhone width, room for iPad tuning).
+    private static func clampWidth(_ value: Double) -> Double {
+        min(600, max(90, value))
     }
 
     /// Position range: 0.0 (left) to 1.0 (right)
@@ -272,23 +352,23 @@ enum CursorMovementStyle: String, CaseIterable {
 /// Visual style for the keyboard appearance
 enum KeyboardStyle: String, CaseIterable {
     case classic // Traditional opaque key backgrounds
-    case liquidGlass // iOS 26+ Liquid Glass effect (falls back to classic on older iOS)
+    case liquidGlass // iOS 26+ Liquid Glass effect (renders as a simplified translucent style on older iOS)
 
     var displayName: String {
         switch self {
         case .classic:
-            "Classic"
+            String(localized: "Classic")
         case .liquidGlass:
-            "Liquid Glass"
+            String(localized: "Liquid Glass")
         }
     }
 
     var description: String {
         switch self {
         case .classic:
-            "Traditional opaque keys"
+            String(localized: "Traditional opaque keys")
         case .liquidGlass:
-            "Transparent glass effect (iOS 26+)"
+            String(localized: "Transparent glass effect (iOS 26+)")
         }
     }
 }

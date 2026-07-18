@@ -110,8 +110,7 @@ extension KeyboardMode {
             name: name,
             keys: newKeys,
             arrangements: arrangements,
-            autoTransitions: autoTransitions,
-            doubleTapMode: doubleTapMode
+            autoTransitions: autoTransitions
         )
     }
 }

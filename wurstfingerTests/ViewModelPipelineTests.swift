@@ -238,7 +238,7 @@ struct ViewModelSlideTests {
             return
         }
         vm.handleSlide(deleteKey, phase: .began)
-        let step = KeyboardConstants.SpaceGestures.dragStep
+        let step = KeyboardConstants.DeleteGestures.dragStep
         vm.handleSlide(deleteKey, phase: .changed(deltaX: -step * 2))
         vm.handleSlide(deleteKey, phase: .ended)
         #expect(target.events.contains(.deleteBackward))
@@ -273,12 +273,14 @@ struct ViewModelDefinitionTests {
         #expect(vm.currentArrangement != nil)
     }
 
-    @Test func unknownLanguageIdDoesNotCrash() throws {
-        let defaults = try #require(UserDefaults(suiteName: "test.\(UUID().uuidString)"))
+    @Test func unknownLanguageIdFallsBackToEnglish() {
+        let defaults = InMemoryUserDefaults()
         let vm = KeyboardViewModel(userDefaults: defaults, shouldPersistSettings: false)
         vm.loadDefinition(for: "nonexistent_XX")
-        #expect(vm.currentDefinition == nil)
-        #expect(vm.activeModeFromDefinition == nil)
+        // Must never leave the keyboard blank — falls back to a renderable layout.
+        #expect(vm.currentDefinition != nil)
+        #expect(vm.currentDefinition?.id == LanguageConfig.english.id)
+        #expect(vm.activeModeFromDefinition != nil)
     }
 
     @Test func allLanguagesLoadSuccessfully() {
@@ -298,7 +300,36 @@ struct ViewModelVCActionTests {
         let (vm, _) = makeViewModel(
             advanceToNextInputMode: { advanceCalled = true }
         )
-        vm.handleGesture(.tap, keyId: UtilitySlot.globe, isReturn: false)
+        // Input-method switch is bound to swipe-left on the globe key.
+        vm.handleGesture(.swipeLeft, keyId: UtilitySlot.globe, isReturn: false)
         #expect(advanceCalled)
+    }
+}
+
+// MARK: - Numpad style wiring
+
+@Suite(.serialized)
+struct ViewModelNumpadStyleTests {
+    private func loadedNumericTopLeftDigit(numpadStyle: String?) -> String? {
+        let defaults = InMemoryUserDefaults()
+        if let numpadStyle {
+            defaults.set(numpadStyle, forKey: SettingsKey.numpadStyle.rawValue)
+        }
+        let vm = KeyboardViewModel(userDefaults: defaults, shouldPersistSettings: false)
+        vm.loadDefinition(for: "de_DE")
+        return vm.currentDefinition?
+            .mode(ModeNames.numeric)?
+            .keys[GridSlot.topLeft]?
+            .bindings[.tap]?.label
+    }
+
+    @Test func defaultNumpadIsPhone() {
+        // Phone layout: 1-2-3 in the top row.
+        #expect(loadedNumericTopLeftDigit(numpadStyle: nil) == "1")
+    }
+
+    @Test func classicNumpadSwapsTopRow() {
+        // Classic calculator layout: 7-8-9 in the top row.
+        #expect(loadedNumericTopLeftDigit(numpadStyle: NumpadStyle.classic.rawValue) == "7")
     }
 }

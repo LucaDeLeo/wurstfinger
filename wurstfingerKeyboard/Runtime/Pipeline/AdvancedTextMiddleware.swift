@@ -18,10 +18,16 @@ import UIKit
 struct AdvancedTextMiddleware: ActionMiddleware {
     private let targetProvider: () -> TextInputTarget?
     private let localeProvider: () -> Locale
+    private let onClipboardSuccess: () -> Void
 
-    init(target: @escaping () -> TextInputTarget?, locale: @escaping () -> Locale) {
+    init(
+        target: @escaping () -> TextInputTarget?,
+        locale: @escaping () -> Locale,
+        onClipboardSuccess: @escaping () -> Void = {}
+    ) {
         targetProvider = target
         localeProvider = locale
+        self.onClipboardSuccess = onClipboardSuccess
     }
 
     func process(_ context: ActionContext, next: (ActionContext) -> Void) {
@@ -62,8 +68,11 @@ struct AdvancedTextMiddleware: ActionMiddleware {
     // MARK: - Delete Forward
 
     private func deleteForward(target: TextInputTarget) {
-        guard let after = target.documentContextAfterInput, !after.isEmpty else { return }
-        target.adjustTextPosition(byCharacterOffset: 1)
+        guard let next = target.documentContextAfterInput?.first else { return }
+        // `adjustTextPosition` moves by UTF-16 code units, so cross the whole
+        // grapheme cluster (emoji can span 2+ units); a fixed +1 would land
+        // mid-surrogate and delete the wrong character.
+        target.adjustTextPosition(byCharacterOffset: next.utf16.count)
         target.deleteBackward()
     }
 
@@ -94,17 +103,26 @@ struct AdvancedTextMiddleware: ActionMiddleware {
 
     // MARK: - Clipboard
 
+    // The clipboard confirmation tick fires from the success paths below —
+    // not from the haptic middleware — so a guarded no-op (no full access,
+    // empty selection/pasteboard) stays silent, mirroring how mode and
+    // language switches only tick on an actual change.
+
     private func handleCopy(target: TextInputTarget) {
         guard target.hasFullAccess else { return }
         if let selected = target.selectedText, !selected.isEmpty {
             UIPasteboard.general.string = selected
+            onClipboardSuccess()
         }
     }
 
     private func handlePaste(target: TextInputTarget) {
         guard target.hasFullAccess else { return }
         if let text = UIPasteboard.general.string, !text.isEmpty {
-            target.insertText(text)
+            // Cap pasted text so a multi-MB pasteboard cannot blow the
+            // keyboard extension's jetsam memory budget. Truncates silently.
+            target.insertText(Self.cappedForInsertion(text))
+            onClipboardSuccess()
         }
     }
 
@@ -113,6 +131,28 @@ struct AdvancedTextMiddleware: ActionMiddleware {
         if let selected = target.selectedText, !selected.isEmpty {
             UIPasteboard.general.string = selected
             target.deleteBackward()
+            onClipboardSuccess()
         }
+    }
+
+    /// Returns `text` capped at `KeyboardConstants.TextInput.maxPasteUTF16Length`
+    /// UTF-16 code units, cut at a grapheme-cluster boundary so no emoji or
+    /// combining sequence is ever split. The cheap `utf16.count` check makes
+    /// the common (small) case allocation-free; the truncating path walks at
+    /// most the capped prefix, so the memory bound holds for the copy too.
+    static func cappedForInsertion(
+        _ text: String,
+        maxUTF16Length: Int = KeyboardConstants.TextInput.maxPasteUTF16Length
+    ) -> String {
+        guard text.utf16.count > maxUTF16Length else { return text }
+        var usedUTF16 = 0
+        var end = text.startIndex
+        while end < text.endIndex {
+            let next = text.index(after: end)
+            usedUTF16 += text[end].utf16.count
+            if usedUTF16 > maxUTF16Length { break }
+            end = next
+        }
+        return String(text[..<end])
     }
 }

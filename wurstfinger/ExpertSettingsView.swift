@@ -49,6 +49,31 @@ struct ExpertSettingsView: View {
     @AppStorage(GestureClassificationThresholds.minOrientedCompactnessKey, store: SharedDefaults.store)
     private var minOrientedCompactness = Double(GestureClassificationThresholds.defaultMinOrientedCompactness)
 
+    // MARK: - Layout Settings (read-only, for the key-height indicator)
+
+    @AppStorage(SettingsKey.keyAspectRatio.rawValue, store: SharedDefaults.store)
+    private var keyAspectRatio = DeviceLayoutUtils.defaultKeyAspectRatio
+
+    @AppStorage(SettingsKey.keyboardWidthPoints.rawValue, store: SharedDefaults.store)
+    private var keyboardWidth = DeviceLayoutUtils.defaultKeyboardWidth
+
+    /// The key height the user actually sees, derived from the shared layout
+    /// metrics resolved from the stored width + aspect-ratio wish. Resolved
+    /// unclamped (no container/screen context) so the indicator reflects the
+    /// device- and orientation-independent wish, matching the size slider.
+    private var effectiveKeyHeight: Double {
+        // The MessagEase grid is 4 columns wide (matches the reference
+        // metrics); the height indicator is column-count independent in
+        // practice, but resolve() needs a concrete value.
+        Double(KeyboardLayoutMetrics.resolve(
+            wishWidth: keyboardWidth,
+            aspectRatio: keyAspectRatio,
+            columns: 4,
+            availableWidth: 0,
+            screenHeight: 0
+        ).cellHeight)
+    }
+
     var body: some View {
         Form {
             warningSection
@@ -63,6 +88,9 @@ struct ExpertSettingsView: View {
                 Section {
                     NavigationLink("Gesture Playground") {
                         GesturePlaygroundView()
+                    }
+                    NavigationLink("Keyboard Health") {
+                        KeyboardHealthView()
                     }
                 } header: {
                     Label("Tools", systemImage: "hammer.fill")
@@ -205,11 +233,11 @@ struct ExpertSettingsView: View {
 
             // Visual indicator
             HStack {
-                Text("Key height: 54pt")
+                Text("Key height: \(Int(effectiveKeyHeight.rounded()))pt")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("Threshold: \(Int(minSwipeLength / 54 * 100))% of key")
+                Text("Threshold: \(Int(minSwipeLength / effectiveKeyHeight * 100))% of key")
                     .font(.caption)
                     .foregroundColor(.orange)
             }

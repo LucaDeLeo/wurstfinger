@@ -14,21 +14,16 @@ struct StyleSettingsView: View {
     @AppStorage(SettingsKey.keyAspectRatio.rawValue, store: SharedDefaults.store)
     private var previewAspectRatio = DeviceLayoutUtils.defaultKeyAspectRatio
 
-    @AppStorage(SettingsKey.keyboardScale.rawValue, store: SharedDefaults.store)
-    private var previewScale = DeviceLayoutUtils.defaultKeyboardScale
+    @AppStorage(SettingsKey.keyboardWidthPoints.rawValue, store: SharedDefaults.store)
+    private var previewWidth = DeviceLayoutUtils.defaultKeyboardWidth
 
     @AppStorage(SettingsKey.keyboardHorizontalPosition.rawValue, store: SharedDefaults.store)
     private var previewPosition = DeviceLayoutUtils.defaultKeyboardPosition
 
-    private var keyboardStyle: KeyboardStyle {
-        get { KeyboardStyle(rawValue: keyboardStyleRaw) ?? .classic }
-        set { keyboardStyleRaw = newValue.rawValue }
-    }
-
     var body: some View {
         VStack(spacing: 20) {
             // Keyboard Preview
-            InteractiveKeyboardPreview(aspectRatio: $previewAspectRatio, scale: $previewScale, position: $previewPosition)
+            InteractiveKeyboardPreview(aspectRatio: $previewAspectRatio, width: $previewWidth, position: $previewPosition)
                 .padding(.horizontal, 16)
 
             ScrollView {
@@ -45,7 +40,7 @@ struct StyleSettingsView: View {
 
                         if keyboardStyleRaw == KeyboardStyle.liquidGlass.rawValue {
                             if #unavailable(iOS 26.0) {
-                                Text("Liquid Glass requires iOS 26 or later. The classic style will be used on this device.")
+                                Text("Liquid Glass is designed for iOS 26 and later. On earlier versions a simplified translucent style is used.")
                                     .font(.caption)
                                     .foregroundColor(.orange)
                                     .padding(.horizontal, 16)

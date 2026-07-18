@@ -13,6 +13,26 @@ import UIKit
 enum KeyboardHapticEvent {
     case tap
     case drag
+    /// Layer/language changes and system actions (globe, dismiss, clipboard)
+    case stateChange
+
+    /// Feedback for an action flowing through the pipeline, or `nil` for
+    /// silence. Text actions are silent here: their haptic already fired on
+    /// touch-down, and firing again on dispatch would double every keystroke.
+    /// Only actions that change keyboard or system state get a distinct
+    /// confirmation tick. Clipboard actions are silent here too: whether
+    /// copy/cut/paste actually does anything is only known inside
+    /// `AdvancedTextMiddleware` (full access, non-empty selection or
+    /// pasteboard), so their tick fires from its success paths instead.
+    static func forPipelineAction(_ action: KeyAction) -> KeyboardHapticEvent? {
+        switch action {
+        case .switchMode, .switchToNextLanguage, .advanceToNextInputMode,
+             .dismissKeyboard:
+            .stateChange
+        default:
+            nil
+        }
+    }
 }
 
 struct DeviceLayoutUtils {
@@ -23,21 +43,15 @@ struct DeviceLayoutUtils {
         UIScreen.main.bounds
     }
 
-    /// Calculates the default keyboard scale to achieve a target width of ~270pt
-    /// (which corresponds to ~67% of an iPhone 17 Pro width).
-    static var defaultKeyboardScale: Double {
-        let targetWidth: CGFloat = 270.0
-        let screenWidth = screenBounds.width
-
-        // Avoid division by zero
-        guard screenWidth > 0 else { return 1.0 }
-
-        // Calculate scale required to hit target width
-        let calculatedScale = targetWidth / screenWidth
-
-        // Clamp between reasonable min/max (e.g., 0.26 to 1.0)
-        // 0.26 is roughly iPad width (1024pt) -> 270/1024 = 0.26
-        return min(1.0, max(0.25, calculatedScale))
+    /// Default keyboard width wish per device class, in points.
+    ///
+    /// Points are the density-independent unit, so the default deliberately
+    /// never consults screen bounds: the previous screen-relative default
+    /// was orientation-dependent and halved the keyboard on a fresh install
+    /// opened in landscape (review finding H1).
+    static var defaultKeyboardWidth: Double {
+        // 320 pt on iPad is a provisional constant pending real iPad tuning.
+        UIDevice.current.userInterfaceIdiom == .pad ? 320.0 : 270.0
     }
 
     static let defaultKeyAspectRatio: Double = 1.0
@@ -59,11 +73,16 @@ final class KeyboardViewModel: ObservableObject {
     /// Updated by the controller in `viewWillLayoutSubviews()` so that
     /// SwiftUI re-evaluates layout after orientation changes.
     @Published private(set) var viewWidth: CGFloat = UIScreen.main.bounds.width
-    /// Whether the device is currently in a landscape orientation.
-    /// Driven by the controller via `updateOrientation(isLandscape:)`, since
-    /// the keyboard's own bounds are always shorter than tall and cannot
-    /// reliably distinguish portrait from landscape on their own.
-    @Published private(set) var isLandscape: Bool = false
+    /// Width cap for the keyboard so it keeps its portrait width in
+    /// landscape and follows narrow panes (Slide Over, Stage Manager).
+    /// Derived from the hosting window's *width* — the keyboard's own window
+    /// is only as tall as the keyboard itself, so its height carries no
+    /// container information — bounded by the screen's shortest side, which
+    /// keeps landscape at the portrait width. Falls back to the screen until
+    /// a window is attached.
+    @Published private(set) var keyboardWidthCap: CGFloat = min(
+        DeviceLayoutUtils.screenBounds.width, DeviceLayoutUtils.screenBounds.height
+    )
     /// The currently active keyboard mode.
     @Published var currentMode: KeyboardMode?
     /// Name of the currently active mode in the data-driven definition.
@@ -72,17 +91,31 @@ final class KeyboardViewModel: ObservableObject {
     // MARK: - Data-Driven Pipeline State (internal for extension access)
 
     var currentDefinition: KeyboardDefinition?
+    /// Signature of the inputs that produced `currentDefinition` (see
+    /// `definitionSignature(languageId:numpadStyle:)`). Kept on the view model
+    /// — not the controller — so in-keyboard language switches, which load a
+    /// new definition directly, keep it in sync.
+    var loadedDefinitionSignature: String?
     var resolverChain: GestureResolverChain?
     var returnSwipeResolverChain: GestureResolverChain?
     var pipeline: ActionPipeline?
     /// Reference to the live double-tap-space middleware so that space
     /// drag/slide gestures can cancel a pending second-tap before it fires.
     weak var doubleTapSpaceMiddleware: DoubleTapSpaceMiddleware?
+
+    /// Whether the current `shifted` mode was engaged by auto-capitalization
+    /// (as opposed to a manual shift tap). Only auto-engaged shift may be
+    /// released by `refreshAutoCapitalization()`; cleared on any mode change.
+    var shiftEngagedByAutoCapitalization = false
     weak var textInputTarget: TextInputTarget?
     var onAdvanceToNextInputMode: (() -> Void)?
     var onDismissKeyboard: (() -> Void)?
     /// Locale used by the pipeline (set from the keyboard definition).
     var pipelineLocale: Locale?
+    /// Published so the globe hint (`hasMultipleLanguages`) re-renders when the
+    /// enabled-language set changes in Settings without the active language
+    /// changing. `private(set)` keeps the normalisation invariants intact.
+    @Published private(set) var enabledLanguageIds: [String] = []
 
     // MARK: - Settings (delegated to extracted classes)
 
@@ -102,11 +135,6 @@ final class KeyboardViewModel: ObservableObject {
         set { hapticSettings.dragIntensity = newValue }
     }
 
-    var hapticEnabled: Bool {
-        get { hapticSettings.enabled }
-        set { hapticSettings.enabled = newValue }
-    }
-
     var utilityColumnLeading: Bool {
         get { layoutSettings.utilityColumnLeading }
         set { layoutSettings.utilityColumnLeading = newValue }
@@ -117,9 +145,9 @@ final class KeyboardViewModel: ObservableObject {
         set { layoutSettings.keyAspectRatio = newValue }
     }
 
-    var keyboardScale: Double {
-        get { layoutSettings.keyboardScale }
-        set { layoutSettings.keyboardScale = newValue }
+    var keyboardWidth: Double {
+        get { layoutSettings.keyboardWidth }
+        set { layoutSettings.keyboardWidth = newValue }
     }
 
     var keyboardHorizontalPosition: Double {
@@ -133,6 +161,12 @@ final class KeyboardViewModel: ObservableObject {
     let shouldPersistSettings: Bool
     var isSpaceDragging = false
     var spaceDragResidual: CGFloat = 0
+    /// Peak signed displacement during the current space drag. Used by the
+    /// discrete cursor-movement mode to classify regular vs. return swipes.
+    var spaceDragPeak: CGFloat = 0
+    /// Cursor-movement style captured at the start of the current space drag, so
+    /// a mid-drag settings change cannot switch classification mode mid-gesture.
+    var spaceDragCursorStyle: CursorMovementStyle = .continuous
     var isDeleteDragging = false
     var deleteDragResidual: CGFloat = 0
     private var userDefaultsObserver: NSObjectProtocol?
@@ -152,6 +186,8 @@ final class KeyboardViewModel: ObservableObject {
         layoutSettings = LayoutSettings(defaults: defaults, shouldPersist: shouldPersistSettings)
         hapticManager = HapticFeedbackManager(settings: hapticSettings)
 
+        enabledLanguageIds = LanguageSettings.normalizedEnabledLanguageIds(from: defaults)
+
         // Forward settings changes to trigger objectWillChange on this ViewModel
         hapticSettings.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -164,12 +200,23 @@ final class KeyboardViewModel: ObservableObject {
         // Note: didChangeNotification only fires within the same process.
         // Cross-process updates from the host app are handled by
         // KeyboardViewController.viewWillAppear → reloadSettings().
+        // Non-persisting view models (previews, showcases, screenshots) are
+        // configured programmatically; reloading everything from the store
+        // would revert forced values (e.g. the full-size screenshot scale) on
+        // the next runloop pass — but haptic settings are never forced, and
+        // the settings screen's preview keyboard should play slider changes
+        // live, so non-persisting view models follow the store for haptics only.
         userDefaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: sharedDefaults,
             queue: .main
         ) { [weak self] _ in
-            self?.reloadSettings()
+            guard let self else { return }
+            if shouldPersistSettings {
+                reloadSettings()
+            } else {
+                hapticSettings.reload()
+            }
         }
     }
 
@@ -186,26 +233,34 @@ final class KeyboardViewModel: ObservableObject {
         viewWidth = width
     }
 
-    /// Updates the tracked orientation. Called by the controller from
-    /// `viewWillLayoutSubviews()` (which inspects its `traitCollection`) so
-    /// `currentContext` can pick portrait/landscape arrangements correctly.
-    func updateOrientation(isLandscape: Bool) {
-        guard isLandscape != self.isLandscape else { return }
-        self.isLandscape = isLandscape
+    /// Updates the tracked window bounds. Called by the controller in
+    /// `viewWillLayoutSubviews()` with the hosting window's bounds; a nil
+    /// window (not yet attached) falls back to the device screen.
+    ///
+    /// Only the window's *width* is meaningful: the keyboard extension's
+    /// window is merely keyboard-sized, so `min(width, height)` would return
+    /// the keyboard height (~300 pt) and squeeze the keys horizontally while
+    /// the height constraint stays — visibly breaking the key aspect ratio.
+    func updateWindowBounds(_ bounds: CGRect?) {
+        let screenShortestSide = min(
+            DeviceLayoutUtils.screenBounds.width, DeviceLayoutUtils.screenBounds.height
+        )
+        let cap = bounds.map { min($0.width, screenShortestSide) } ?? screenShortestSide
+        guard cap > 0, cap != keyboardWidthCap else { return }
+        keyboardWidthCap = cap
     }
 
     // MARK: - Arrangement Selection
 
-    /// Determines the active arrangement context based on orientation and
-    /// the user's utility-column preference.
+    /// Determines the active arrangement context from the user's utility-column
+    /// preference.
+    ///
+    /// The keyboard intentionally keeps the portrait arrangement in **all**
+    /// orientations so the key positions stay constant when the device rotates
+    /// (muscle memory). The data model still defines dedicated `.landscape`
+    /// arrangements, but the runtime does not select them.
     var currentContext: ArrangementContext {
-        let utilityLeft = layoutSettings.utilityColumnLeading
-        switch (isLandscape, utilityLeft) {
-        case (false, false): return .portrait
-        case (false, true): return .portraitUtilityLeft
-        case (true, false): return .landscape
-        case (true, true): return .landscapeUtilityLeft
-        }
+        layoutSettings.utilityColumnLeading ? .portraitUtilityLeft : .portrait
     }
 
     /// The grid arrangement for `currentMode` and `currentContext`.
@@ -219,15 +274,78 @@ final class KeyboardViewModel: ObservableObject {
         currentDefinition?.mode(activeModeName)
     }
 
-    /// Exposes haptic tap to the pipeline extension.
-    func triggerHapticTap() {
-        hapticManager.tap()
+    // MARK: - Layout Metrics
+
+    /// Resolved layout metrics for the tracked view width — the single
+    /// geometry source for the grid, key fonts, gesture classification, and
+    /// the controller's height constraint. Recomputed whenever settings
+    /// reload or `viewWidth`/`keyboardWidthCap` change (all `@Published`).
+    var layoutMetrics: KeyboardLayoutMetrics {
+        layoutMetrics(forContainerWidth: viewWidth)
+    }
+
+    /// Metrics resolved against an explicit container width, for preview and
+    /// screenshot surfaces that render at a width other than the tracked
+    /// view width. The height guard reads the *screen* bounds — the
+    /// extension's own window is only keyboard-sized and carries no usable
+    /// height information (see `updateWindowBounds`).
+    func layoutMetrics(forContainerWidth width: CGFloat) -> KeyboardLayoutMetrics {
+        layoutSettings.resolveMetrics(
+            columns: currentArrangement?.columns ?? 4,
+            availableWidth: width > 0 ? min(width, keyboardWidthCap) : keyboardWidthCap,
+            screenHeight: DeviceLayoutUtils.screenBounds.height
+        )
+    }
+
+    /// Pipeline hook: fires a confirmation tick for state-changing actions.
+    /// Text actions stay silent — their haptic fires on touch-down.
+    func triggerHaptic(for action: KeyAction) {
+        guard let event = KeyboardHapticEvent.forPipelineAction(action) else { return }
+        hapticManager.trigger(event)
     }
 
     func reloadSettings() {
         // Delegate to extracted settings classes - eliminates duplicate code
         hapticSettings.reload()
         layoutSettings.reload()
+
+        // Equality-guarded: this runs on every in-process defaults write (via
+        // the didChangeNotification observer), and an unguarded assignment to
+        // a @Published property re-renders the whole keyboard each time.
+        let newEnabledLanguageIds = LanguageSettings.normalizedEnabledLanguageIds(from: sharedDefaults)
+        if enabledLanguageIds != newEnabledLanguageIds {
+            enabledLanguageIds = newEnabledLanguageIds
+        }
+    }
+
+    func switchToNextLanguage() {
+        guard enabledLanguageIds.count > 1 else { return }
+
+        // Cycle from the layout that is actually on screen. Startup can load a
+        // pinned language whose id differs from the stored selection, so the
+        // active definition — not shared defaults — is the source of truth;
+        // otherwise the first swipe would just reload the current layout.
+        let currentId = currentDefinition?.id
+            ?? sharedDefaults.string(forKey: SettingsKey.selectedLanguageId.rawValue)
+            ?? "en_US"
+        // Static lookup on the already-normalized enabled list: constructing
+        // a throwaway LanguageSettings here would re-run init normalization
+        // (an app-group read/write cycle) on every globe swipe.
+        let nextId = LanguageSettings.nextLanguageId(after: currentId, in: enabledLanguageIds)
+
+        if nextId != currentId {
+            sharedDefaults.set(nextId, forKey: SettingsKey.selectedLanguageId.rawValue)
+            loadDefinition(for: nextId)
+        }
+    }
+
+    var hasMultipleLanguages: Bool {
+        enabledLanguageIds.count > 1
+    }
+
+    var currentLanguageLabel: String {
+        guard let locale = pipelineLocale else { return "" }
+        return LanguageSettings.label(for: locale)
     }
 
     // MARK: - Haptic Feedback (delegated to HapticFeedbackManager)
@@ -239,5 +357,10 @@ final class KeyboardViewModel: ObservableObject {
 
     func feedbackDrag() {
         hapticManager.drag()
+    }
+
+    /// Confirmation tick for explicit layer/language switches.
+    func feedbackStateChange() {
+        hapticManager.stateChange()
     }
 }

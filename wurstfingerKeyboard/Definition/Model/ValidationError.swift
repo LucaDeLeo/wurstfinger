@@ -115,12 +115,22 @@ extension KeyboardDefinition {
             errors.append(.modeNameMismatch(key: key, modeName: mode.name))
         }
 
-        // All switchMode targets must exist
+        // All switchMode targets must exist — in primary actions, return-swipe
+        // actions, and tap-cycle actions alike.
         for (_, mode) in modes {
             for (_, key) in mode.keys {
                 for (_, binding) in key.bindings {
                     if case let .switchMode(target) = binding.action,
                        modes[target] == nil {
+                        errors.append(.missingMode(target))
+                    }
+                    if case let .switchMode(target)? = binding.returnAction,
+                       modes[target] == nil {
+                        errors.append(.missingMode(target))
+                    }
+                }
+                for action in key.tapCycleActions ?? [] {
+                    if case let .switchMode(target) = action, modes[target] == nil {
                         errors.append(.missingMode(target))
                     }
                 }
@@ -129,11 +139,6 @@ extension KeyboardDefinition {
             // All autoTransition targets must exist
             for (_, targetMode) in mode.autoTransitions where modes[targetMode] == nil {
                 errors.append(.missingMode(targetMode))
-            }
-
-            // All doubleTapMode targets must exist
-            if let doubleTap = mode.doubleTapMode, modes[doubleTap] == nil {
-                errors.append(.missingMode(doubleTap))
             }
         }
 

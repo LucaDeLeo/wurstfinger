@@ -16,8 +16,8 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.keyAspectRatio.rawValue, store: SharedDefaults.store)
     private var keyAspectRatio = DeviceLayoutUtils.defaultKeyAspectRatio
 
-    @AppStorage(SettingsKey.keyboardScale.rawValue, store: SharedDefaults.store)
-    private var keyboardScale = DeviceLayoutUtils.defaultKeyboardScale
+    @AppStorage(SettingsKey.keyboardWidthPoints.rawValue, store: SharedDefaults.store)
+    private var keyboardWidth = DeviceLayoutUtils.defaultKeyboardWidth
 
     @AppStorage(SettingsKey.keyboardHorizontalPosition.rawValue, store: SharedDefaults.store)
     private var keyboardHorizontalPosition = DeviceLayoutUtils.defaultKeyboardPosition
@@ -43,10 +43,22 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.doubleTapSpaceAction.rawValue, store: SharedDefaults.store)
     private var doubleTapSpaceActionRaw = DoubleTapSpaceAction.default.rawValue
 
+    @AppStorage(SettingsKey.longPressNumbersEnabled.rawValue, store: SharedDefaults.store)
+    private var longPressNumbersEnabled = false
+
     private let licenseURL = URL(string: "https://github.com/cl445/wurstfinger/blob/main/LICENSE")!
 
     @AppStorage(SettingsKey.expertModeEnabled.rawValue, store: SharedDefaults.store)
     private var expertModeEnabled = false
+
+    @AppStorage(SettingsKey.hideLetters.rawValue, store: SharedDefaults.store)
+    private var hideLetters = false
+
+    @AppStorage(SettingsKey.hideStandardSymbols.rawValue, store: SharedDefaults.store)
+    private var hideStandardSymbols = false
+
+    @AppStorage(SettingsKey.hideExtraSymbols.rawValue, store: SharedDefaults.store)
+    private var hideExtraSymbols = false
 
     var body: some View {
         NavigationStack {
@@ -66,14 +78,14 @@ struct SettingsView: View {
     private var generalSection: some View {
         Section {
             NavigationLink(destination: LanguageSelectionView()) {
-                SettingsRow(icon: "globe", color: .blue, title: "Language", subtitle: languageSettings.selectedLanguage.name)
+                SettingsRow(icon: "globe", color: .blue, title: "Languages", subtitle: enabledLanguagesSummary)
             }
 
             Toggle(isOn: $utilityColumnLeading) {
                 SettingsRow(
                     icon: "keyboard.badge.ellipsis", color: .indigo,
                     title: "Utility Keys on Left",
-                    subtitle: "Places globe, symbols, delete and return on the left"
+                    subtitle: String(localized: "Places globe, symbols, delete and return on the left")
                 )
             }
 
@@ -81,7 +93,15 @@ struct SettingsView: View {
                 SettingsRow(
                     icon: "textformat.size.larger", color: .teal,
                     title: "Auto-Capitalize",
-                    subtitle: "Capitalize after sentence-ending punctuation"
+                    subtitle: String(localized: "Capitalize after sentence-ending punctuation")
+                )
+            }
+
+            Toggle(isOn: $longPressNumbersEnabled) {
+                SettingsRow(
+                    icon: "123.rectangle", color: .pink,
+                    title: "Type Numbers by Holding",
+                    subtitle: String(localized: "Hold a letter key to type its digit")
                 )
             }
 
@@ -127,20 +147,28 @@ struct SettingsView: View {
                 SettingsRow(icon: "paintbrush", color: .cyan, title: "Style", subtitle: keyboardStyleDescription)
             }
 
+            NavigationLink(destination: LabelVisibilitySettingsView()) {
+                SettingsRow(
+                    icon: "eye.slash", color: .indigo,
+                    title: "Label Visibility",
+                    subtitle: labelVisibilityDescription
+                )
+            }
+
             NavigationLink(destination: AspectRatioSettingsView(aspectRatio: $keyAspectRatio)) {
                 SettingsRow(
                     icon: "square.resize", color: .orange,
                     title: "Key Aspect Ratio",
-                    subtitle: "Current: \(String(format: "%.2f", keyAspectRatio)):1"
+                    subtitle: String(localized: "Current: \(String(format: "%.2f", keyAspectRatio)):1")
                 )
             }
 
-            NavigationLink(destination: KeyboardSizePositionSettingsView(scale: $keyboardScale, position: $keyboardHorizontalPosition)) {
+            NavigationLink(destination: KeyboardSizePositionSettingsView(width: $keyboardWidth, position: $keyboardHorizontalPosition)) {
                 SettingsRow(
                     icon: "arrow.up.left.and.arrow.down.right",
                     color: .green,
                     title: "Size & Position",
-                    subtitle: "Scale: \(Int(keyboardScale * 100))%, Position: \(positionLabel(for: keyboardHorizontalPosition))"
+                    subtitle: sizePositionDescription
                 )
             }
 
@@ -177,7 +205,9 @@ struct SettingsView: View {
                     icon: "slider.horizontal.3",
                     color: .orange,
                     title: "Expert",
-                    subtitle: expertModeEnabled ? "Gesture tuning enabled" : "Advanced gesture settings"
+                    subtitle: expertModeEnabled
+                        ? String(localized: "Gesture tuning enabled")
+                        : String(localized: "Advanced gesture settings")
                 )
             }
 
@@ -240,18 +270,51 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
+    private var enabledLanguagesSummary: String {
+        let names = languageSettings.enabledLanguages.map(\.name)
+        let list = if names.count <= 2 {
+            names.joined(separator: ", ")
+        } else {
+            String(localized: "\(names[0]) + \(names.count - 1) more")
+        }
+        if let pinned = languageSettings.pinnedLanguage {
+            return String(localized: "\(list) (default: \(pinned.name))")
+        }
+        return list
+    }
+
+    private var sizePositionDescription: String {
+        // Percent relative to the device-class default width (the wish is
+        // stored in points; 100 % == DeviceLayoutUtils.defaultKeyboardWidth).
+        let percent = Int((keyboardWidth / DeviceLayoutUtils.defaultKeyboardWidth * 100).rounded())
+        let scale = "\(percent)%"
+        return String(localized: "Scale: \(scale), Position: \(positionLabel(for: keyboardHorizontalPosition))")
+    }
+
     private var keyboardStyleDescription: String {
         let style = KeyboardStyle(rawValue: keyboardStyleRaw) ?? .classic
         return style.displayName
+    }
+
+    private var labelVisibilityDescription: String {
+        let hidden = [
+            hideLetters ? String(localized: "letters") : nil,
+            hideStandardSymbols ? String(localized: "standard symbols") : nil,
+            hideExtraSymbols ? String(localized: "extra symbols") : nil,
+        ].compactMap(\.self)
+        if hidden.isEmpty {
+            return String(localized: "All labels visible")
+        }
+        return String(localized: "Hiding \(hidden.joined(separator: ", "))")
     }
 
     private var cursorMovementStyleDescription: String {
         let style = CursorMovementStyle(rawValue: cursorMovementStyleRaw) ?? .continuous
         switch style {
         case .continuous:
-            return "Drag to move cursor"
+            return String(localized: "Drag to move cursor")
         case .discrete:
-            return "Swipe per character, return-swipe per word"
+            return String(localized: "Swipe per character, return-swipe per word")
         }
     }
 
@@ -259,43 +322,36 @@ struct SettingsView: View {
         let style = NumpadStyle(rawValue: numpadStyleRaw) ?? .phone
         switch style {
         case .phone:
-            return "Phone layout (1-2-3)"
+            return String(localized: "Phone layout (1-2-3)")
         case .classic:
-            return "Classic layout (7-8-9)"
+            return String(localized: "Classic layout (7-8-9)")
         }
     }
 
     private func positionLabel(for value: Double) -> String {
         if value < 0.25 {
-            "Left"
+            String(localized: "Left")
         } else if value > 0.75 {
-            "Right"
+            String(localized: "Right")
         } else {
-            "Center"
+            String(localized: "Center")
         }
     }
 
     private func hapticModeDescription() -> String {
-        let tap: String = formatIntensity(hapticTapIntensity)
-        let drag: String = formatIntensity(hapticDragIntensity)
-        return "Tap: \(tap) • Drag: \(drag)"
-    }
-
-    private func formatIntensity(_ value: Double) -> String {
-        if value <= 0.001 {
-            return "Off"
-        }
-        return "\(Int(round(value * 100)))%"
+        let tap: String = HapticIntensityLevel(storedIntensity: hapticTapIntensity).displayName
+        let drag: String = HapticIntensityLevel(storedIntensity: hapticDragIntensity).displayName
+        return String(localized: "Tap: \(tap) • Drag: \(drag)")
     }
 }
 
 struct SettingsRow: View {
     let icon: String
     let color: Color
-    let title: String
+    let title: LocalizedStringKey
     let subtitle: String?
 
-    init(icon: String, color: Color, title: String, subtitle: String? = nil) {
+    init(icon: String, color: Color, title: LocalizedStringKey, subtitle: String? = nil) {
         self.icon = icon
         self.color = color
         self.title = title

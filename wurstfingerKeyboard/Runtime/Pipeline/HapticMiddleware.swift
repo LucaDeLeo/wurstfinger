@@ -7,8 +7,10 @@
 
 import Foundation
 
-/// Triggers haptic feedback for the current action, then forwards the
-/// context unchanged.
+/// Passes the current action to the injected feedback trigger, then forwards
+/// the context unchanged. The trigger decides which actions get feedback:
+/// state-changing actions receive a confirmation tick, text actions stay
+/// silent because their haptic already fired on touch-down.
 ///
 /// The concrete feedback implementation is injected as a closure so this
 /// file stays free of UIKit/`HapticFeedbackManager` dependencies. Wiring

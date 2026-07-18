@@ -117,28 +117,20 @@ struct wurstfingerTests {
 
     // MARK: - Haptic Persistence Tests
 
-    @Test @MainActor func hapticIntensitiesPersistToDefaults() throws {
-        let suite = "group.de.akator.wurstfinger.tests.hapticsPersist"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
-        defer { defaults.removePersistentDomain(forName: suite) }
+    @Test @MainActor func hapticIntensitiesPersistToDefaults() {
+        let defaults = InMemoryUserDefaults()
 
         let viewModel = KeyboardViewModel(userDefaults: defaults)
         viewModel.hapticIntensityTap = 0.8
         viewModel.hapticIntensityDrag = 1.1
-
-        defaults.synchronize()
 
         #expect(defaults.double(forKey: KeyboardViewModel.hapticTapIntensityKey) == 0.8)
         let dragDefault = defaults.double(forKey: KeyboardViewModel.hapticDragIntensityKey)
         #expect(abs(dragDefault - 1.0) < 0.0001)
     }
 
-    @Test @MainActor func previewViewModelDoesNotPersist() throws {
-        let suite = "group.de.akator.wurstfinger.tests.preview"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
-        defer { defaults.removePersistentDomain(forName: suite) }
+    @Test @MainActor func previewViewModelDoesNotPersist() {
+        let defaults = InMemoryUserDefaults()
 
         defaults.set(0.3, forKey: KeyboardViewModel.hapticTapIntensityKey)
 
@@ -150,11 +142,8 @@ struct wurstfingerTests {
         #expect(abs(persistedTap - 0.3) < 0.0001)
     }
 
-    @Test @MainActor func hapticIntensityClampsWithinBounds() throws {
-        let suite = "group.de.akator.wurstfinger.tests.clamp"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
-        defer { defaults.removePersistentDomain(forName: suite) }
+    @Test @MainActor func hapticIntensityClampsWithinBounds() {
+        let defaults = InMemoryUserDefaults()
 
         let viewModel = KeyboardViewModel(userDefaults: defaults)
 
@@ -292,4 +281,74 @@ struct wurstfingerTests {
         #expect(allInserts.last == "Á", "Compose should produce Á after uppercase A, got \(allInserts.last ?? "nil")")
     }
 
+    @Test func composeAsFirstActionInShiftedModeConsumesShift() {
+        // Auto-capitalization is off here (default in makeViewModel), so the
+        // shift release must come from the mode transition itself, not from
+        // an auto-cap side effect.
+        let (vm, target) = makeViewModel(languageId: "de_DE")
+
+        // Type "a", then engage shift manually.
+        vm.handleGesture(.tap, keyId: GridSlot.topLeft, isReturn: false)
+        vm.handleGesture(.swipeUp, keyId: GridSlot.midRight, isReturn: false)
+        #expect(vm.activeModeName == ModeNames.shifted)
+
+        // Compose as the FIRST action in shifted mode: ´ + a → á.
+        vm.handleGesture(.swipeUpRight, keyId: GridSlot.topCenter, isReturn: false)
+
+        let inserts = target.events.compactMap { if case let .insertText(t) = $0 { t } else { nil } }
+        #expect(inserts.last == "á", "Compose should produce á, got \(inserts.last ?? "nil")")
+        #expect(
+            vm.activeModeName == ModeNames.main,
+            "A composed letter must consume the one-shot shift exactly like a plain letter"
+        )
+    }
+
+    @Test func composeTriggerWithoutRuleKeepsShiftEngaged() {
+        // Deliberate policy: when the compose gesture finds no rule (no
+        // preceding character) it merely commits the trigger character —
+        // a symbol, not a letter. Per the iOS-style one-shot shift
+        // semantics, symbols must NOT consume shift, so the keyboard stays
+        // shifted until an actual letter is produced.
+        let (vm, target) = makeViewModel(languageId: "de_DE")
+
+        vm.handleGesture(.swipeUp, keyId: GridSlot.midRight, isReturn: false)
+        #expect(vm.activeModeName == ModeNames.shifted)
+
+        // Empty document: ´ has nothing to compose with and commits "´".
+        vm.handleGesture(.swipeUpRight, keyId: GridSlot.topCenter, isReturn: false)
+
+        let inserts = target.events.compactMap { if case let .insertText(t) = $0 { t } else { nil } }
+        #expect(inserts.last == "´", "Trigger should commit literally, got \(inserts.last ?? "nil")")
+        #expect(
+            vm.activeModeName == ModeNames.shifted,
+            "A committed trigger character is a symbol and must not consume shift"
+        )
+    }
+
+    // MARK: - Asterisk Regression (Vietnamese tone rules must not be global)
+
+    @Test func asteriskInsertsLiterallyAfterVowel() {
+        // Regression: `a` + `*` used to compose the Vietnamese nặng tone (ạ)
+        // on every layout because the tone table lived in the global rules.
+        let (vm, target) = makeViewModel(languageId: "de_DE")
+
+        vm.handleGesture(.tap, keyId: GridSlot.topLeft, isReturn: false) // a
+        vm.handleGesture(.swipeRight, keyId: GridSlot.bottomLeft, isReturn: false) // *
+
+        #expect(!target.events.contains(.deleteBackward), "Asterisk must not rewrite the preceding vowel")
+        let inserts = target.events.compactMap { if case let .insertText(t) = $0 { t } else { nil } }
+        #expect(inserts == ["a", "*"], "Expected literal asterisk after 'a', got \(inserts)")
+    }
+
+    @Test func degreeComposeStillWorksAfterVowel() {
+        // Guards the neighboring compose binding: a + ° (bottomRight
+        // swipeUpRight) still composes å.
+        let (vm, target) = makeViewModel(languageId: "de_DE")
+
+        vm.handleGesture(.tap, keyId: GridSlot.topLeft, isReturn: false) // a
+        vm.handleGesture(.swipeUpRight, keyId: GridSlot.bottomRight, isReturn: false) // °
+
+        let inserts = target.events.compactMap { if case let .insertText(t) = $0 { t } else { nil } }
+        #expect(inserts.last == "å", "Compose should produce å, got \(inserts.last ?? "nil")")
+    }
 }

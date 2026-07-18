@@ -19,10 +19,24 @@ enum GridKeyboardFactory {
     ///   - localeIdentifier: Locale string for uppercasing (e.g. "de_DE")
     ///   - centerCharacters: 3x3 grid of center tap characters
     ///   - directionalOverrides: Per-slot overrides that replace CommonKeys defaults
+    ///   - returnOverrides: Per-slot return-swipe outputs that replace the
+    ///     auto-generated uppercase return action (e.g. Hebrew final forms:
+    ///     a return swipe on כ produces ך). Each entry must target a gesture
+    ///     that already has a binding on that slot.
+    ///   - composeRuleOverrides: Language-specific compose rules merged over the
+    ///     global base rules at runtime (override wins for the same trigger +
+    ///     base character). Defaults to nil (global rules only).
+    ///   - supportsCapitalization: Whether the script distinguishes letter case.
+    ///     Caseless scripts (Hebrew) pass `false`: the layout then has no
+    ///     shifted/capsLock modes, no shift binding on the midRight key, and
+    ///     auto-capitalization is disabled in the definition settings.
     ///   - numericBackToAlphaLabel: Label shown on the symbols key in numeric
     ///     mode that switches back to the main (alphabetic) layer. Defaults to
     ///     the Latin "abc"; non-Latin layouts (Hebrew, Russian, …) should
     ///     supply a script-appropriate label.
+    ///   - numericDigits: Digit set (indexed by value 0–9) used in the numeric
+    ///     layer. Defaults to Western ASCII digits; Arabic, Persian, and Urdu
+    ///     layouts should pass their script-specific digit set.
     ///   - inputMethod: Which input method is applied to committed characters.
     ///     Defaults to `.direct`; Vietnamese layouts should pass `.telex` so
     ///     that `TelexMiddleware` activates for this keyboard at runtime.
@@ -32,8 +46,13 @@ enum GridKeyboardFactory {
         localeIdentifier: String,
         centerCharacters: [[String]],
         directionalOverrides: [String: [GestureType: String]] = [:],
+        returnOverrides: [String: [GestureType: String]] = [:],
+        composeRuleOverrides: ComposeRuleSet? = nil,
+        supportsCapitalization: Bool = true,
         numericBackToAlphaLabel: String = NumericLayouts.defaultBackToAlphaLabel,
-        inputMethod: InputMethodKind = .direct
+        numericDigits: [String] = NumericLayouts.westernDigits,
+        inputMethod: InputMethodKind = .direct,
+        combineRuleSet: ComposeRuleSet? = nil
     ) -> KeyboardDefinition {
         precondition(
             centerCharacters.count == 3 && centerCharacters.allSatisfy { $0.count == 3 },
@@ -58,7 +77,7 @@ enum GridKeyboardFactory {
                     for (gesture, text) in overrides {
                         let isLetter = text.unicodeScalars.contains { CharacterSet.letters.contains($0) }
                         let returnAction: KeyAction? = isLetter
-                            ? .commitText(text.uppercased(with: locale))
+                            ? .commitText(text.keyboardUppercased(with: locale))
                             : nil
                         bindings[gesture] = KeyBinding(
                             label: text, action: .commitText(text),
@@ -73,6 +92,29 @@ enum GridKeyboardFactory {
                     category: nil, returnAction: nil, accessibilityLabel: nil
                 )
 
+                // Apply explicit return-swipe outputs (replace the auto-generated
+                // uppercase return action). Needed for caseless scripts where
+                // uppercasing is the identity, e.g. Hebrew final forms (כ → ך).
+                if let returns = returnOverrides[slotId] {
+                    for (gesture, text) in returns {
+                        guard gesture.isSwipe else {
+                            preconditionFailure(
+                                "returnOverrides[\(slotId)][\(gesture)] must target a swipe gesture"
+                            )
+                        }
+                        guard let base = bindings[gesture] else {
+                            preconditionFailure(
+                                "returnOverrides[\(slotId)][\(gesture)] has no base binding"
+                            )
+                        }
+                        bindings[gesture] = KeyBinding(
+                            label: base.label, action: base.action,
+                            category: base.category, returnAction: .commitText(text),
+                            accessibilityLabel: base.accessibilityLabel
+                        )
+                    }
+                }
+
                 letterKeys[slotId] = KeyConfig(
                     id: slotId, bindings: bindings, swipeMode: .eightWay,
                     slideType: .none, style: .primary, tapCycleActions: nil
@@ -80,7 +122,13 @@ enum GridKeyboardFactory {
             }
         }
 
-        // 2. Merge utility keys
+        // 2. Merge utility keys — the slot-id sets must be disjoint or the
+        // merge would silently swallow a utility key (same invariant as
+        // `NumericLayouts.buildMode`).
+        precondition(
+            Set(letterKeys.keys).isDisjoint(with: CommonKeys.allUtilityKeys.keys),
+            "letter and utility key IDs must not overlap"
+        )
         let allKeys = letterKeys.merging(CommonKeys.allUtilityKeys) { letter, _ in letter }
 
         // 3. Build base mode with all keys (includes shift-down on midRight)
@@ -88,45 +136,56 @@ enum GridKeyboardFactory {
             name: ModeNames.main,
             keys: allKeys,
             arrangements: arrangements,
-            autoTransitions: [:],
-            doubleTapMode: nil
+            autoTransitions: [:]
         )
 
-        // Generate the shifted base once and derive both shifted + caps lock.
-        let shiftedBase = baseMode.generateShifted(locale: locale)
+        var modes: [String: KeyboardMode] = [
+            ModeNames.numeric: NumericLayouts.phone(
+                digits: numericDigits, backToAlphaLabel: numericBackToAlphaLabel
+            ),
+        ]
 
-        // 4. Shifted — shift-up points directly to capsLock (label stays ⇧).
-        let shiftedMode = shiftedBase
-            .with(autoTransitions: [.letter: ModeNames.main])
-            .replacingShiftUpBinding(label: "⇧", action: .switchMode(ModeNames.capsLock))
+        if supportsCapitalization {
+            // Generate the shifted base once and derive both shifted + caps lock.
+            let shiftedBase = baseMode.generateShifted(locale: locale)
 
-        // 5. Caps lock — shift-up is no-op (stays in capsLock), label shows ⇪.
-        let capsLockMode = shiftedBase
-            .with(name: ModeNames.capsLock)
-            .replacingShiftUpBinding(label: "⇪", action: .switchMode(ModeNames.capsLock))
+            // 4. Shifted — shift-up points directly to capsLock (label stays ⇧).
+            modes[ModeNames.shifted] = shiftedBase
+                .with(autoTransitions: [.letter: ModeNames.main])
+                .replacingShiftUpBinding(label: "⇧", action: .switchMode(ModeNames.capsLock))
 
-        // 6. Main mode — remove shift-down hint from midRight (only shown in shifted/capsLock).
-        let mainMode = baseMode
-            .removingBinding(keyId: GridSlot.midRight, gesture: .swipeDown)
+            // 5. Caps lock — shift-up is no-op (stays in capsLock), label shows ⇪.
+            modes[ModeNames.capsLock] = shiftedBase
+                .with(name: ModeNames.capsLock)
+                .replacingShiftUpBinding(label: "⇪", action: .switchMode(ModeNames.capsLock))
+
+            // 6. Main mode — remove shift-down hint from midRight (only shown in shifted/capsLock).
+            modes[ModeNames.main] = baseMode
+                .removingBinding(keyId: GridSlot.midRight, gesture: .swipeDown)
+        } else {
+            // Caseless script: no shifted/capsLock modes and no shift
+            // affordance on the midRight key (neither the ⇧ shift-up
+            // binding nor the ⇩ back-to-main hint).
+            modes[ModeNames.main] = baseMode
+                .removingBinding(keyId: GridSlot.midRight, gesture: .swipeUp)
+                .removingBinding(keyId: GridSlot.midRight, gesture: .swipeDown)
+        }
 
         // 7. Assemble definition
         return KeyboardDefinition(
             title: title,
             id: id,
             localeIdentifier: localeIdentifier,
-            modes: [
-                ModeNames.main: mainMode,
-                ModeNames.shifted: shiftedMode,
-                ModeNames.capsLock: capsLockMode,
-                ModeNames.numeric: NumericLayouts.phone(backToAlphaLabel: numericBackToAlphaLabel),
-            ],
+            modes: modes,
             defaultMode: ModeNames.main,
             settings: KeyboardDefinitionSettings(
-                autoCapitalize: true,
-                autoCapitalizers: [],
-                composeRuleOverrides: nil,
-                inputMethod: inputMethod
-            )
+                autoCapitalize: supportsCapitalization,
+                composeRuleOverrides: composeRuleOverrides,
+                inputMethod: inputMethod,
+                combineRuleSet: combineRuleSet
+            ),
+            numericBackToAlphaLabel: numericBackToAlphaLabel,
+            numericDigits: numericDigits
         )
     }
 }

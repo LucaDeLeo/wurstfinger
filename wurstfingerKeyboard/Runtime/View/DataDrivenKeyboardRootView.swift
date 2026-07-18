@@ -22,12 +22,13 @@ struct DataDrivenKeyboardRootView: View {
     private var keyboardStyle: KeyboardStyle = .classic
 
     var body: some View {
-        let screenBounds = DeviceLayoutUtils.screenBounds
-        let screenShortestSide = min(screenBounds.width, screenBounds.height)
         let currentWidth = overrideWidth ?? viewModel.viewWidth
-        let baseWidth = min(currentWidth, screenShortestSide)
-        let scaledWidth = baseWidth * viewModel.keyboardScale
-        let availableSpace = currentWidth - scaledWidth
+        // Single geometry source: the resolved metrics drive the keyboard
+        // width here and the row/cell sizes in the grid, so they can never
+        // desynchronize (the old split between the view-model width path and
+        // @AppStorage-read row heights was review finding M8/H3).
+        let metrics = viewModel.layoutMetrics(forContainerWidth: currentWidth)
+        let availableSpace = currentWidth - metrics.keyboardWidth
         let horizontalOffset = availableSpace * (viewModel.keyboardHorizontalPosition - 0.5)
 
         ZStack {
@@ -47,12 +48,18 @@ struct DataDrivenKeyboardRootView: View {
                     },
                     onSlide: { key, phase in
                         viewModel.handleSlide(key, phase: phase)
-                    }
+                    },
+                    onLongPress: { key in
+                        viewModel.handleGesture(.longPress, keyId: key.id, isReturn: false)
+                    },
+                    languageLabel: viewModel.currentLanguageLabel,
+                    showLanguageLabel: viewModel.hasMultipleLanguages,
+                    metrics: metrics
                 )
                 .padding(.horizontal, KeyboardConstants.Layout.horizontalPadding)
                 .padding(.top, KeyboardConstants.Layout.verticalPaddingTop)
                 .padding(.bottom, KeyboardConstants.Layout.verticalPaddingBottom)
-                .frame(width: scaledWidth)
+                .frame(width: metrics.keyboardWidth)
                 .offset(x: horizontalOffset)
             }
         }
@@ -67,7 +74,14 @@ struct DataDrivenKeyboardRootView: View {
         case .classic:
             Color(.systemBackground)
         case .liquidGlass:
-            Color.clear
+            // A keyboard extension's input view only delivers touches that land
+            // on a rendered surface; fully transparent regions pass through. A
+            // `Color.clear` root would drop taps that fall in the gaps between
+            // keys, so paint a near-invisible fill instead: the whole keyboard
+            // becomes a real surface that receives those touches while the keys
+            // on top still win the hit-test. ~2% over the glass backdrop reads
+            // as clear.
+            Color(.systemBackground).opacity(0.02)
         }
     }
 }

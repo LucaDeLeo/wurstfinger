@@ -10,8 +10,8 @@ import SwiftUI
 struct AspectRatioSettingsView: View {
     @Binding var aspectRatio: Double
 
-    @AppStorage(SettingsKey.keyboardScale.rawValue, store: SharedDefaults.store)
-    private var keyboardScale = DeviceLayoutUtils.defaultKeyboardScale
+    @AppStorage(SettingsKey.keyboardWidthPoints.rawValue, store: SharedDefaults.store)
+    private var keyboardWidth = DeviceLayoutUtils.defaultKeyboardWidth
 
     @AppStorage(SettingsKey.keyboardHorizontalPosition.rawValue, store: SharedDefaults.store)
     private var keyboardHorizontalPosition = DeviceLayoutUtils.defaultKeyboardPosition
@@ -19,7 +19,7 @@ struct AspectRatioSettingsView: View {
     var body: some View {
         VStack(spacing: 20) {
             // Keyboard Preview
-            InteractiveKeyboardPreview(aspectRatio: $aspectRatio, scale: $keyboardScale, position: $keyboardHorizontalPosition)
+            InteractiveKeyboardPreview(aspectRatio: $aspectRatio, width: $keyboardWidth, position: $keyboardHorizontalPosition)
                 .padding(.horizontal, 16)
 
             // Slider Section
@@ -28,7 +28,7 @@ struct AspectRatioSettingsView: View {
                     Text("Aspect Ratio")
                         .font(.headline)
                     Spacer()
-                    TextField("Value", value: $aspectRatio, formatter: NumberFormatter.decimalFormatter)
+                    TextField("Value", value: $aspectRatio, formatter: NumberFormatter.decimalFormatter(minimum: 1.0, maximum: 1.62))
                         .keyboardType(.decimalPad)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 80)
@@ -43,7 +43,7 @@ struct AspectRatioSettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
-                        Text("Square")
+                        Text("Square · Default")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
@@ -51,7 +51,7 @@ struct AspectRatioSettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
-                        Text("Default")
+                        Text("Wide")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
@@ -65,8 +65,7 @@ struct AspectRatioSettingsView: View {
                     }
                 }
                 Text(
-                    // swiftlint:disable:next line_length
-                    "Adjust the width-to-height ratio of the keys. 1.0 creates square keys, 1.5 is the default appearance, and 1.62 is the golden ratio (widest)."
+                    "Adjust the width-to-height ratio of the keys. 1.0 creates square keys (the default), and 1.62 is the golden ratio (widest)."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)

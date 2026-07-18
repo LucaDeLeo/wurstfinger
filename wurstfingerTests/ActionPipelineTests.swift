@@ -3,8 +3,8 @@
 //  WurstfingerTests
 //
 //  Tests for ActionContext, ActionPipeline, and the middleware suite
-//  (HapticMiddleware, ComposeMiddleware, TextInputMiddleware,
-//  AutoCapitalizationMiddleware, ModeTransitionMiddleware).
+//  (ComposeMiddleware, TextInputMiddleware, AutoCapitalizationMiddleware,
+//  ModeTransitionMiddleware).
 //
 
 import Foundation
@@ -65,8 +65,7 @@ private enum PipelineFixtures {
                     rows: [[KeyPlacement(keyId: keys.first?.id ?? "x")]]
                 ),
             ],
-            autoTransitions: autoTransitions,
-            doubleTapMode: nil
+            autoTransitions: autoTransitions
         )
     }
 
@@ -80,7 +79,6 @@ private enum PipelineFixtures {
             defaultMode: modes.first?.name ?? "main",
             settings: KeyboardDefinitionSettings(
                 autoCapitalize: true,
-                autoCapitalizers: [],
                 composeRuleOverrides: nil
             )
         )
@@ -186,38 +184,6 @@ struct ActionPipelineTests {
     }
 }
 
-// MARK: - HapticMiddleware
-
-struct HapticMiddlewareTests {
-    @Test func triggersFeedbackForAction() {
-        var triggered: [KeyAction] = []
-        let middleware = HapticMiddleware(trigger: { triggered.append($0) })
-        let sink = RecordingMiddleware()
-        let pipeline = ActionPipeline(middlewares: [middleware, sink])
-
-        pipeline.process(PipelineFixtures.context(action: .commitText("a")))
-
-        #expect(triggered == [.commitText("a")])
-        #expect(sink.received.first?.action == .commitText("a"))
-    }
-
-    @Test func forwardsContextUnchanged() {
-        let middleware = HapticMiddleware(trigger: { _ in })
-        let sink = RecordingMiddleware()
-        let pipeline = ActionPipeline(middlewares: [middleware, sink])
-
-        let original = PipelineFixtures.context(
-            action: .deleteBackward,
-            binding: PipelineFixtures.binding(action: .deleteBackward),
-            mode: "shifted"
-        )
-        pipeline.process(original)
-
-        #expect(sink.received.first?.action == .deleteBackward)
-        #expect(sink.received.first?.mode == "shifted")
-    }
-}
-
 // MARK: - ComposeMiddleware
 
 struct ComposeMiddlewareTests {
@@ -255,6 +221,61 @@ struct ComposeMiddlewareTests {
 
         #expect(sink.received.first?.action == .commitText("¨"))
         #expect(deleted == 0, "No rule → no previous-character deletion")
+    }
+
+    /// Composing never combines across a space. The rule set carries
+    /// Thumb-Key's space-consuming " " + x fallback rows, but the
+    /// middleware must skip them: "hello " + ´ → "hello ´".
+    @Test func preservesSpaceAndCommitsTriggerAfterSpace() {
+        let middleware = ComposeMiddleware(
+            compose: { previous, _ in
+                Issue.record("compose lookup must be skipped after a space")
+                return previous == " " ? "'" : nil
+            },
+            cycleAccent: { _ in nil },
+            previousCharacter: { " " },
+            deletePreviousCharacter: { Issue.record("Space must never be consumed by compose") }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .compose(trigger: "´")))
+
+        #expect(sink.received.first?.action == .commitText("´"))
+    }
+
+    @Test func stillComposesAfterLetterDespiteSpaceGuard() {
+        var deleted = 0
+        let middleware = ComposeMiddleware(
+            compose: { previous, trigger in
+                (previous == "e" && trigger == "´") ? "é" : nil
+            },
+            cycleAccent: { _ in nil },
+            previousCharacter: { "e" },
+            deletePreviousCharacter: { deleted += 1 }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .compose(trigger: "´")))
+
+        #expect(sink.received.first?.action == .commitText("é"))
+        #expect(deleted == 1)
+    }
+
+    @Test func commitsTriggerAtDocumentStart() {
+        let middleware = ComposeMiddleware(
+            compose: { _, _ in Issue.record("compose must not run at document start"); return nil },
+            cycleAccent: { _ in nil },
+            previousCharacter: { "" },
+            deletePreviousCharacter: { Issue.record("Must not delete at document start") }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .compose(trigger: "´")))
+
+        #expect(sink.received.first?.action == .commitText("´"))
     }
 
     @Test func insertsTriggerWhenNoPreviousCharacter() {
@@ -320,74 +341,170 @@ struct ComposeMiddlewareTests {
 
         #expect(sink.received.first?.action == .commitText("!"))
     }
+
+    // MARK: - cycleAccents
+
+    @Test func cyclesAccentWhenCycleExists() {
+        var deleted = 0
+        let middleware = ComposeMiddleware(
+            compose: { _, _ in Issue.record("compose must not run for cycleAccents"); return nil },
+            cycleAccent: { $0 == "ä" ? "â" : nil },
+            previousCharacter: { "ä" },
+            deletePreviousCharacter: { deleted += 1 }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .cycleAccents))
+
+        #expect(sink.received.first?.action == .commitText("â"))
+        #expect(deleted == 1, "Previous character must be consumed when a cycle exists")
+    }
+
+    @Test func cycleAccentsPassesThroughWhenNoPreviousCharacter() {
+        let middleware = ComposeMiddleware(
+            compose: { _, _ in nil },
+            cycleAccent: { _ in Issue.record("cycleAccent must not run without a previous char"); return nil },
+            previousCharacter: { "" },
+            deletePreviousCharacter: { Issue.record("Must not delete without previous char") }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .cycleAccents))
+
+        // No previous character → action forwarded unchanged.
+        #expect(sink.received.first?.action == .cycleAccents)
+    }
+
+    @Test func cycleAccentsPassesThroughWhenNoCycleExists() {
+        let middleware = ComposeMiddleware(
+            compose: { _, _ in nil },
+            cycleAccent: { _ in nil }, // no cycle for this character
+            previousCharacter: { "x" },
+            deletePreviousCharacter: { Issue.record("Must not delete when no cycle exists") }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .cycleAccents))
+
+        #expect(sink.received.first?.action == .cycleAccents)
+    }
+}
+
+// MARK: - CombineMiddleware
+
+struct CombineMiddlewareTests {
+    @Test func combinesWhenRuleMatches() {
+        var deleted = 0
+        let middleware = CombineMiddleware(
+            isActive: { true },
+            documentContextBefore: { "इ" },
+            deleteBackward: { deleted += 1 },
+            combine: { previous, trigger in
+                (previous == "इ" && trigger == "इ") ? "ई" : nil
+            }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .commitText("इ")))
+
+        #expect(sink.received.first?.action == .commitText("ई"))
+        #expect(deleted == 1, "The consumed base character must be deleted before the combined commit")
+    }
+
+    @Test func passesThroughWhenNoRuleMatches() {
+        let middleware = CombineMiddleware(
+            isActive: { true },
+            documentContextBefore: { "अ" },
+            deleteBackward: { Issue.record("Must not delete when no rule matches") },
+            combine: { _, _ in nil }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .commitText("इ")))
+
+        #expect(sink.received.first?.action == .commitText("इ"))
+    }
+
+    @Test func inertWhenInactive() {
+        let middleware = CombineMiddleware(
+            isActive: { false },
+            documentContextBefore: { Issue.record("Must not read context when inactive"); return "इ" },
+            deleteBackward: { Issue.record("Must not delete when inactive") },
+            combine: { _, _ in Issue.record("Must not combine when inactive"); return nil }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .commitText("इ")))
+
+        #expect(sink.received.first?.action == .commitText("इ"))
+    }
+
+    @Test func passesThroughWithoutPreviousCharacter() {
+        let middleware = CombineMiddleware(
+            isActive: { true },
+            documentContextBefore: { "" },
+            deleteBackward: { Issue.record("Must not delete without a previous char") },
+            combine: { _, _ in Issue.record("Must not combine without a previous char"); return nil }
+        )
+        let sink = RecordingMiddleware()
+        let pipeline = ActionPipeline(middlewares: [middleware, sink])
+
+        pipeline.process(PipelineFixtures.context(action: .commitText("इ")))
+
+        #expect(sink.received.first?.action == .commitText("इ"))
+    }
 }
 
 // MARK: - TextInputMiddleware
 
-private final class MockTextInputTarget: TextInputTarget {
-    enum Event: Equatable {
-        case insertText(String)
-        case deleteBackward
-        case adjustCursor(Int)
-    }
-
-    var events: [Event] = []
-    var documentContextBeforeInput: String?
-    var documentContextAfterInput: String?
-    var selectedText: String?
-    var hasFullAccess: Bool = false
-
-    func insertText(_ text: String) {
-        events.append(.insertText(text))
-    }
-
-    func deleteBackward() {
-        events.append(.deleteBackward)
-    }
-
-    func adjustTextPosition(byCharacterOffset offset: Int) {
-        events.append(.adjustCursor(offset))
-    }
-}
+// These tests use the shared `MockTextTarget` (TestHelpers.swift). A private
+// event-only mock used to live here; it drifted from the shared one (no
+// document context / UTF-16 semantics), so it was removed (review M12).
 
 struct TextInputMiddlewareTests {
-    private func pipeline(target: MockTextInputTarget) -> ActionPipeline {
+    private func pipeline(target: MockTextTarget) -> ActionPipeline {
         let middleware = TextInputMiddleware(target: { target })
         return ActionPipeline(middlewares: [middleware])
     }
 
     @Test func commitTextInsertsText() {
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         pipeline(target: target).process(PipelineFixtures.context(action: .commitText("hi")))
         #expect(target.events == [.insertText("hi")])
     }
 
     @Test func deleteBackwardDeletes() {
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         pipeline(target: target).process(PipelineFixtures.context(action: .deleteBackward))
         #expect(target.events == [.deleteBackward])
     }
 
     @Test func spaceInsertsSpaceCharacter() {
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         pipeline(target: target).process(PipelineFixtures.context(action: .space))
         #expect(target.events == [.insertText(" ")])
     }
 
     @Test func newlineInsertsLineBreak() {
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         pipeline(target: target).process(PipelineFixtures.context(action: .newline))
         #expect(target.events == [.insertText("\n")])
     }
 
     @Test func moveCursorAdjustsPosition() {
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         pipeline(target: target).process(PipelineFixtures.context(action: .moveCursor(offset: -3)))
         #expect(target.events == [.adjustCursor(-3)])
     }
 
     @Test func nonTextActionsAreIgnored() {
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         let sink = RecordingMiddleware()
         let middleware = TextInputMiddleware(target: { target })
         let pipe = ActionPipeline(middlewares: [middleware, sink])
@@ -771,7 +888,7 @@ struct PipelineIntegrationTests {
     @Test func composeThenTextInputProducesCommittedCharacter() {
         // ComposeMiddleware rewrites the action; TextInputMiddleware then
         // inserts the rewritten text into the target.
-        let target = MockTextInputTarget()
+        let target = MockTextTarget()
         var deleted = 0
         let compose = ComposeMiddleware(
             compose: { prev, trig in (prev == "a" && trig == "¨") ? "ä" : nil },
@@ -788,25 +905,9 @@ struct PipelineIntegrationTests {
         #expect(target.events == [.insertText("ä")])
     }
 
-    @Test func hapticsFireBeforeTextInput() {
-        var order: [String] = []
-        let target = MockTextInputTarget()
-        let haptic = HapticMiddleware(trigger: { _ in order.append("haptic") })
-        let input = TextInputMiddleware(target: { () -> TextInputTarget? in
-            order.append("input")
-            return target
-        })
-        let pipe = ActionPipeline(middlewares: [haptic, input])
-
-        pipe.process(PipelineFixtures.context(action: .commitText("x")))
-
-        #expect(order == ["haptic", "input"])
-    }
-
     @Test func fullPipelineRunsAllMiddlewaresInOrder() {
         var steps: [String] = []
-        let target = MockTextInputTarget()
-        let haptic = HapticMiddleware(trigger: { _ in steps.append("haptic") })
+        let target = MockTextTarget()
         let compose = ComposeMiddleware(
             compose: { _, _ in nil },
             cycleAccent: { _ in nil },
@@ -828,14 +929,14 @@ struct PipelineIntegrationTests {
             ),
             onModeChange: { _ in steps.append("transition") }
         )
-        let pipe = ActionPipeline(middlewares: [haptic, compose, input, autoCap, transition])
+        let pipe = ActionPipeline(middlewares: [compose, input, autoCap, transition])
 
         let binding = PipelineFixtures.binding(action: .commitText("a"), category: .letter)
         pipe.process(ActionContext(action: .commitText("a"), binding: binding, mode: "shifted"))
 
         // autoCap and transition both run post-`next`, so they unwind in
         // reverse order: transition (deepest) fires before autoCap.evaluate.
-        #expect(steps == ["haptic", "input", "transition", "evaluate"])
+        #expect(steps == ["input", "transition", "evaluate"])
         #expect(target.events == [.insertText("a")])
     }
 }

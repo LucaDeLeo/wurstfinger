@@ -2,68 +2,93 @@
 //  KeyboardGridView.swift
 //  Wurstfinger
 //
-//  Generic SwiftUI Grid renderer for any GridArrangement + key pool.
+//  Generic SwiftUI grid renderer for any GridArrangement + key pool.
 //
 
 import SwiftUI
 
-/// Generic grid renderer that lays out a `GridArrangement` using SwiftUI's
-/// `Grid` view (iOS 16+). Width multipliers map directly onto
-/// `gridCellColumns`, so multi-column keys (e.g. space) are supported
-/// without hardcoding any positions.
+/// Generic grid renderer for a `GridArrangement` and key pool.
 ///
-/// **Height-spanning keys.** SwiftUI's `Grid` does not expose a built-in
-/// `gridCellRows` modifier. Multi-row placements (e.g. landscape return key)
-/// are tracked in the model via `KeyPlacement.heightMultiplier` but the
-/// rendering is not yet implemented here. Currently all placements fed to
-/// this view must have `heightMultiplier == 1`.
+/// Uses `GridLayoutSolver` to resolve the arrangement into absolutely
+/// positioned cells and `KeyboardGridLayout` to place them, so keys can span
+/// multiple columns **and** rows (e.g. the landscape return key with
+/// `heightMultiplier == 2`). Width/height multipliers map directly onto the
+/// cell's column/row span, without hardcoding any positions.
 struct KeyboardGridView: View {
     let arrangement: GridArrangement
     let keys: [String: KeyConfig]
     let onGesture: (KeyConfig, GestureType, Bool) -> Void
     var onTouchDown: (() -> Void)?
     var onSlide: ((KeyConfig, SlidePhase) -> Void)?
+    /// Forwarded to `KeyView`; returns whether the long press was handled.
+    var onLongPress: ((KeyConfig) -> Bool)?
+    /// Active-language hint for the switch key, supplied by `KeyboardViewModel`
+    /// so it reflects the loaded definition rather than re-derived storage.
+    var languageLabel: String = ""
+    var showLanguageLabel: Bool = false
+
+    /// Resolved layout metrics injected by `DataDrivenKeyboardRootView` from
+    /// the view model rather than read via `@AppStorage`: the root view
+    /// derives the keyboard *width* from the same metrics, and reading the
+    /// settings from a second source desynchronizes width and row height
+    /// whenever the view model is configured programmatically (screenshot and
+    /// showcase modes with `shouldPersistSettings: false`).
+    let metrics: KeyboardLayoutMetrics
 
     var body: some View {
-        Grid(
+        let cells = GridLayoutSolver.solve(arrangement)
+        let totalRows = cells.map { $0.row + $0.rowSpan }.max() ?? 0
+        KeyboardGridLayout(
+            cells: cells,
+            columns: arrangement.columns,
+            rowHeight: metrics.rowHeight,
             horizontalSpacing: KeyboardConstants.Layout.gridHorizontalSpacing,
             verticalSpacing: KeyboardConstants.Layout.gridVerticalSpacing
         ) {
-            ForEach(Array(arrangement.rows.enumerated()), id: \.offset) { _, row in
-                GridRow {
-                    ForEach(Array(row.enumerated()), id: \.offset) { _, placement in
-                        cell(for: placement)
-                    }
-                }
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                cellContent(for: cell, totalRows: totalRows)
             }
         }
     }
 
-    private func cell(for placement: KeyPlacement) -> some View {
-        assert(
-            placement.heightMultiplier == 1,
-            "Multi-row rendering is not yet implemented in KeyboardGridView"
-        )
-        return cellContent(for: placement)
-    }
-
     @ViewBuilder
-    private func cellContent(for placement: KeyPlacement) -> some View {
-        if let key = keys[placement.keyId] {
+    private func cellContent(for cell: SolvedCell, totalRows: Int) -> some View {
+        if let key = keys[cell.keyId] {
             KeyView(
                 key: key,
                 onGesture: onGesture,
                 onTouchDown: onTouchDown,
                 onSlide: onSlide,
-                spanRatio: CGFloat(placement.widthMultiplier) / CGFloat(placement.heightMultiplier)
+                onLongPress: onLongPress,
+                spanRatio: CGFloat(cell.columnSpan) / CGFloat(cell.rowSpan),
+                visualInset: visualInset(for: cell, totalRows: totalRows),
+                metrics: metrics,
+                languageLabel: languageLabel,
+                showLanguageLabel: showLanguageLabel
             )
-            .gridCellColumns(placement.widthMultiplier)
-            .gridCellAnchor(.top)
-            .id(placement.keyId)
+            .id(cell.keyId)
         } else {
             Color.clear
-                .gridCellColumns(placement.widthMultiplier)
         }
+    }
+
+    /// Inset that keeps the key's drawn bounds unchanged while its touch cell
+    /// fills the gaps to neighbouring keys. Mirrors `KeyboardGridLayout`, which
+    /// grows the cell frame by the same amount.
+    private func visualInset(for cell: SolvedCell, totalRows: Int) -> EdgeInsets {
+        let insets = KeyboardGridLayout.gapInsets(
+            for: cell,
+            columns: arrangement.columns,
+            totalRows: totalRows,
+            horizontalSpacing: KeyboardConstants.Layout.gridHorizontalSpacing,
+            verticalSpacing: KeyboardConstants.Layout.gridVerticalSpacing
+        )
+        return EdgeInsets(
+            top: insets.top,
+            leading: insets.leading,
+            bottom: insets.bottom,
+            trailing: insets.trailing
+        )
     }
 
     // MARK: - Span Inspection (Test Hooks)

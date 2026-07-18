@@ -9,10 +9,10 @@ import Testing
 
 struct KeyboardDefinitionThumbKeyOverrideTests {
     private func englishBase() -> KeyboardDefinition {
-        guard let base = LanguageDefinitions.all.first(where: { $0.id == "en_US" }) else {
+        guard let descriptor = LanguageDefinitions.all.first(where: { $0.id == "en_US" }) else {
             preconditionFailure("English MessagEase definition not found")
         }
-        return base
+        return descriptor.makeDefinition()
     }
 
     @Test func emptyOverrideReturnsSelf() {

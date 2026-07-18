@@ -20,18 +20,58 @@ struct KeyView: View {
     let onGesture: (KeyConfig, GestureType, Bool) -> Void
     var onTouchDown: (() -> Void)?
     var onSlide: ((KeyConfig, SlidePhase) -> Void)?
+    /// Handles a long press on this key; returns whether it dispatched an
+    /// action (a handled long press consumes the touch). Long-press detection
+    /// only runs when this is set and the user setting is enabled.
+    var onLongPress: ((KeyConfig) -> Bool)?
     var spanRatio: CGFloat = 1.0
+
+    /// Inset between the full touch cell and the key's visible bounds. The cell
+    /// supplied by `KeyboardGridLayout` extends halfway into the gap toward each
+    /// neighbour so there are no dead zones; insetting the drawn content by the
+    /// same amount keeps the visible key exactly where it was. Defaults to zero.
+    var visualInset: EdgeInsets = .init()
 
     @State private var isActive = false
 
     @AppStorage(SettingsKey.keyboardStyle.rawValue, store: SharedDefaults.store)
     private var keyboardStyle: KeyboardStyle = .classic
 
-    @AppStorage(SettingsKey.keyboardScale.rawValue, store: SharedDefaults.store)
-    private var keyboardScale: Double = DeviceLayoutUtils.defaultKeyboardScale
+    /// Resolved layout metrics injected by `KeyboardGridView` (same reasoning
+    /// as there: an `@AppStorage` read desynchronizes from the width path
+    /// when the view model is configured programmatically). Feeds the gesture
+    /// classification geometry and the font scaling.
+    var metrics: KeyboardLayoutMetrics = .reference
 
-    @AppStorage(SettingsKey.keyAspectRatio.rawValue, store: SharedDefaults.store)
-    private var keyAspectRatio: Double = DeviceLayoutUtils.defaultKeyAspectRatio
+    /// Short language label (e.g. "DE") shown on the switch key, and whether to
+    /// show it. Driven by the active keyboard locale via `KeyboardViewModel`
+    /// (threaded through `KeyboardGridView`) rather than re-derived from shared
+    /// defaults, so the hint stays correct even when startup loads a pinned
+    /// language whose id differs from the stored selection.
+    var languageLabel: String = ""
+    var showLanguageLabel: Bool = false
+
+    @AppStorage(SettingsKey.hideLetters.rawValue, store: SharedDefaults.store)
+    private var hideLetters = false
+
+    @AppStorage(SettingsKey.hideStandardSymbols.rawValue, store: SharedDefaults.store)
+    private var hideStandardSymbols = false
+
+    @AppStorage(SettingsKey.hideExtraSymbols.rawValue, store: SharedDefaults.store)
+    private var hideExtraSymbols = false
+
+    @AppStorage(SettingsKey.longPressNumbersEnabled.rawValue, store: SharedDefaults.store)
+    private var longPressNumbersEnabled = false
+
+    /// Whether the label of `binding` should be drawn, honouring the user's
+    /// label-visibility toggles (numbers and functional keys always show).
+    private func isLabelVisible(_ binding: KeyBinding) -> Bool {
+        LabelCategory.of(binding).isVisible(
+            hideLetters: hideLetters,
+            hideStandardSymbols: hideStandardSymbols,
+            hideExtraSymbols: hideExtraSymbols
+        )
+    }
 
     /// Maps emoji labels to SF Symbol names for utility keys.
     private static let sfSymbolMap: [String: String] = [
@@ -51,17 +91,29 @@ struct KeyView: View {
             label
             hintOverlay
         }
-        .frame(height: effectiveKeyHeight)
+        // Inset the drawn key from the touch cell by `visualInset`, so the
+        // visible key keeps its position/size while the cell itself extends into
+        // the inter-key gaps (see KeyboardGridLayout.gapInsets).
+        .padding(visualInset)
+        // Fill the cell frame imposed by KeyboardGridLayout. The layout sizes
+        // rows from the same effective key height, so single-row keys are
+        // unchanged while a spanning key (e.g. landscape return) grows to cover
+        // multiple rows.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(key.id)
         .accessibilityAddTraits(.isButton)
-        .contentShape(Rectangle().inset(by: -KeyboardTouchArea.padding))
+        // The whole cell is the touch target. Adjacent cells tile the surface
+        // with no gaps, so a plain rectangle covers it fully.
+        .contentShape(Rectangle())
 
         if usesSlideGesture {
             base.modifier(SlideGestureHandler(
                 slideType: key.slideType,
                 onSlide: { phase in onSlide?(key, phase) },
                 onTouchDown: { onTouchDown?() },
+                onLongPress: longPressHandler,
                 isActive: $isActive
             ))
         } else {
@@ -70,7 +122,12 @@ struct KeyView: View {
                     onGesture(key, classification.gesture, classification.isReturn)
                 },
                 onTouchDown: { onTouchDown?() },
-                aspectRatio: keyAspectRatio,
+                // Account for the spanned cell: a multi-row/-column key is not
+                // 1×1, so scale the rendered cell aspect ratio (from the same
+                // metrics that size the cell) by columnSpan/rowSpan (spanRatio)
+                // to classify swipes against the real geometry.
+                aspectRatio: metrics.cellAspectRatio * spanRatio,
+                onLongPress: longPressHandler,
                 isActive: $isActive
             ))
         }
@@ -110,22 +167,18 @@ struct KeyView: View {
         }
     }
 
-    /// Effective key height accounting for both keyboard scale and aspect ratio.
-    private var effectiveKeyHeight: CGFloat {
-        KeyboardConstants.Calculations.keyHeight(aspectRatio: keyAspectRatio) * keyboardScale
-    }
-
-    /// Scaled font size proportional to effective key height.
+    /// Scaled font size proportional to the rendered cell height
+    /// (`metrics.fontScale` is cell height over the reference key height).
     private var scaledFontSize: CGFloat {
         let base = Self.baseFontSize(for: key.style)
-        let scaled = base * (effectiveKeyHeight / KeyboardConstants.FontSizes.mainLabelReferenceHeight)
+        let scaled = base * metrics.fontScale
         return min(max(scaled, KeyboardConstants.FontSizes.mainLabelMinSize), KeyboardConstants.FontSizes.mainLabelMaxSize)
     }
 
-    /// Scaled hint font size proportional to effective key height.
+    /// Scaled hint font size proportional to the rendered cell height.
     private var scaledHintFontSize: CGFloat {
         let base = KeyboardConstants.FontSizes.hintBaseSize
-        let scaled = base * (effectiveKeyHeight / KeyboardConstants.FontSizes.hintReferenceHeight)
+        let scaled = base * metrics.fontScale
         return min(max(scaled, KeyboardConstants.FontSizes.hintMinSize), KeyboardConstants.FontSizes.hintMaxSize)
     }
 
@@ -150,6 +203,13 @@ struct KeyView: View {
         key.slideType != .none
     }
 
+    /// Long-press handler for the gesture recognizer, or nil when the
+    /// opt-in setting is off or no handler is wired up (preview contexts).
+    private var longPressHandler: (() -> Bool)? {
+        guard longPressNumbersEnabled, let onLongPress else { return nil }
+        return { onLongPress(key) }
+    }
+
     // MARK: - View Construction
 
     @ViewBuilder
@@ -170,6 +230,9 @@ struct KeyView: View {
     private var label: some View {
         if key.style == .spacebar {
             // Spacebar renders blank — label is purely for accessibility.
+            EmptyView()
+        } else if let tap = key.bindings[.tap], !isLabelVisible(tap) {
+            // The centre label is hidden by the label-visibility setting.
             EmptyView()
         } else {
             let font = Font.system(size: scaledFontSize, weight: .semibold, design: .rounded)
@@ -208,6 +271,12 @@ struct KeyView: View {
         case .copy: "doc.on.doc"
         case .paste: "doc.on.clipboard"
         case .cut: "scissors"
+        // Note: on the globe key `hintOverlay` renders the current-language
+        // label (e.g. "DE") for this action instead — both occupy the same
+        // directional slot, so the more informative label wins there. The
+        // icon keeps the action→icon mapping complete for any other render
+        // of a language-switch binding.
+        case .switchToNextLanguage: "globe.badge.chevron.backward"
         default: nil
         }
     }
@@ -249,17 +318,37 @@ struct KeyView: View {
             let vPad = KeyboardConstants.FontSizes.hintBaseVerticalPadding * fontRatio
 
             ForEach(Array(key.bindings.keys), id: \.self) { gesture in
+                // Render a hint when it has a text label, or when the action
+                // maps to an icon (globe, dismiss, copy/cut/paste). Utility
+                // icon hints carry an empty label on purpose — their glyph is
+                // derived from the action, so gating on the label alone would
+                // hide them entirely.
                 if let binding = key.bindings[gesture],
-                   !binding.label.isEmpty,
                    let alignment = Self.hintAlignments[gesture] {
-                    hintContent(for: binding)
-                        .fixedSize()
-                        .padding(Self.hintEdgePadding(for: gesture, horizontal: hPad, vertical: vPad))
-                        .frame(
-                            width: size.width,
-                            height: size.height,
-                            alignment: alignment
-                        )
+                    if binding.action == .switchToNextLanguage {
+                        if showLanguageLabel {
+                            Text(languageLabel)
+                                .font(.system(size: scaledHintFontSize * 0.75, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.primary.opacity(0.5))
+                                .fixedSize()
+                                .padding(Self.hintEdgePadding(for: gesture, horizontal: hPad, vertical: vPad))
+                                .frame(
+                                    width: size.width,
+                                    height: size.height,
+                                    alignment: alignment
+                                )
+                        }
+                    } else if !binding.label.isEmpty || Self.hintIcon(for: binding.action) != nil,
+                              isLabelVisible(binding) {
+                        hintContent(for: binding)
+                            .fixedSize()
+                            .padding(Self.hintEdgePadding(for: gesture, horizontal: hPad, vertical: vPad))
+                            .frame(
+                                width: size.width,
+                                height: size.height,
+                                alignment: alignment
+                            )
+                    }
                 }
             }
         }

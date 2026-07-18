@@ -24,9 +24,10 @@ enum KeyboardConstants {
         /// Matches iOS 15+ system keyboard style.
         static let cornerRadius: CGFloat = 8
 
-        /// Default key aspect ratio (width/height).
-        /// 1.5 provides a comfortable rectangular key shape similar to standard keyboards.
-        static let defaultAspectRatio: CGFloat = 1.5
+        /// Reference key aspect ratio (width/height) at which `height` is defined.
+        /// Used only as the baseline in `Calculations.keyHeight`; it is NOT the
+        /// user-facing default setting (that is `DeviceLayoutUtils.defaultKeyAspectRatio`).
+        static let referenceAspectRatio: CGFloat = 1.5
 
         /// Total number of rows in the keyboard layout.
         /// 3 rows for main keys + 1 row for space bar = 4 rows.
@@ -51,11 +52,11 @@ enum KeyboardConstants {
         /// Normal hint label size (for less common characters).
         static let hintNormal: CGFloat = 10
 
-        // Main label dynamic scaling
+        // Main label dynamic scaling. Font sizes scale with the rendered
+        // cell height relative to `KeyDimensions.height` (see
+        // `KeyboardLayoutMetrics.fontScale`).
         /// Base size for main label scaling calculations.
         static let mainLabelBaseSize: CGFloat = 26
-        /// Reference key height for scaling calculations.
-        static let mainLabelReferenceHeight: CGFloat = KeyDimensions.height
         /// Minimum main label size to ensure readability.
         static let mainLabelMinSize: CGFloat = 20
         /// Maximum main label size to prevent overflow.
@@ -64,8 +65,6 @@ enum KeyboardConstants {
         // Hint label dynamic scaling
         /// Base size for hint label scaling.
         static let hintBaseSize: CGFloat = 14
-        /// Reference height for hint scaling.
-        static let hintReferenceHeight: CGFloat = KeyDimensions.height
         /// Minimum hint size to ensure readability.
         static let hintMinSize: CGFloat = 10
         /// Maximum hint size to prevent visual clutter.
@@ -117,8 +116,29 @@ enum KeyboardConstants {
         static let finalOffsetMultiplier: CGFloat = 0.71
 
         /// Number of touch points to buffer for gesture analysis.
-        /// 60 points at 60Hz = 1 second of touch history.
-        static let positionBufferSize: Int = 60
+        /// SwiftUI's DragGesture delivers samples at display refresh rate, so
+        /// the buffer is sized for the fastest shipping display: 120 points
+        /// hold 1 second of history at 120Hz (ProMotion) and 2 seconds at
+        /// 60Hz. A smaller buffer evicts the outbound leg of slow return
+        /// swipes, which then misclassify as plain swipes after
+        /// origin-anchoring (see `KeyGestureRecognizer.anchoringOrigin`).
+        static let positionBufferSize: Int = 120
+    }
+
+    // MARK: - Long Press
+
+    enum LongPress {
+        /// How long the finger must rest on a key before a long press fires.
+        /// Deliberately above UIKit's 0.5s default: hesitating mid-word is
+        /// common on a gesture keyboard, and an accidental digit is worse
+        /// than a slightly slower intentional one (tuned on device).
+        static let duration: TimeInterval = 0.7
+
+        /// Maximum travel from touch-down before a pending long press is
+        /// cancelled. Matches `UILongPressGestureRecognizer.allowableMovement`
+        /// so natural finger wobble doesn't cancel the hold, while anything
+        /// resembling a swipe does.
+        static let movementTolerance: CGFloat = 10
     }
 
     // MARK: - Space Key Gestures
@@ -142,6 +162,11 @@ enum KeyboardConstants {
         /// double-tap punctuation shortcut. Mirrors typical iOS double-tap
         /// detection windows.
         static let doubleTapWindow: TimeInterval = 0.3
+
+        /// Minimum upward travel to classify a vertical space-bar swipe
+        /// (label-visibility toggle). Mirrors `Gesture.minSwipeLength` so the
+        /// space bar demands the same commitment as a key swipe.
+        static let swipeUpActivationThreshold: CGFloat = Gesture.minSwipeLength
     }
 
     // MARK: - Delete Key Gestures
@@ -152,6 +177,11 @@ enum KeyboardConstants {
 
         /// Distance to activate slide-delete (continuous deletion).
         static let slideActivationThreshold: CGFloat = 28
+
+        /// Distance per deletion step during slide-delete (one character).
+        /// Decoupled from `SpaceGestures.dragStep` so delete and cursor
+        /// sensitivity can be tuned independently.
+        static let dragStep: CGFloat = 14
 
         /// Distance for word-at-a-time deletion gesture.
         static let wordSwipeThreshold: CGFloat = 40
@@ -165,6 +195,16 @@ enum KeyboardConstants {
 
         /// Initial delay before repeat-delete starts (in seconds).
         static let repeatDelay: TimeInterval = 0.35
+    }
+
+    // MARK: - Text Input
+
+    enum TextInput {
+        /// Maximum size of a pasted string in UTF-16 code units (~200 KB as
+        /// NSString storage). The pasteboard is the one unbounded external
+        /// input in the jetsam-constrained keyboard extension; longer text is
+        /// silently truncated at a grapheme boundary before insertion.
+        static let maxPasteUTF16Length = 200_000
     }
 
     // MARK: - Preview Settings
@@ -181,15 +221,19 @@ enum KeyboardConstants {
     enum Calculations {
         /// Calculates the adjusted key height based on aspect ratio
         static func keyHeight(aspectRatio: CGFloat) -> CGFloat {
-            KeyDimensions.height * (KeyDimensions.defaultAspectRatio / aspectRatio)
+            KeyDimensions.height * (KeyDimensions.referenceAspectRatio / aspectRatio)
         }
 
-        /// Calculates the total keyboard base height (without scaling)
-        static func baseHeight(aspectRatio: CGFloat) -> CGFloat {
-            let keyHeight = keyHeight(aspectRatio: aspectRatio)
-            return (keyHeight * CGFloat(KeyDimensions.totalRows)) +
-                (Layout.gridVerticalSpacing * CGFloat(KeyDimensions.totalRows - 1)) +
-                Layout.verticalPaddingTop + Layout.verticalPaddingBottom
+        /// Keyboard width at which the grid's cells come out exactly
+        /// `cellSize` wide. Under the point-anchored metrics, square cells
+        /// are simply `keyAspectRatio == 1.0`, so this only converts a
+        /// desired cell size into the outer keyboard width (cells + gaps +
+        /// paddings). Used by the App Store screenshot mode to reproduce the
+        /// square marketing look at the full reference key height.
+        static func squareKeyboardWidth(cellSize: CGFloat, columns: Int) -> CGFloat {
+            (cellSize * CGFloat(columns)) +
+                (Layout.gridHorizontalSpacing * CGFloat(columns - 1)) +
+                (Layout.horizontalPadding * 2)
         }
     }
 }
