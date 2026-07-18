@@ -36,11 +36,11 @@ struct DefinitionSignatureTests {
     @Test func signatureCombinesLanguageAndNumpadStyle() {
         #expect(
             KeyboardViewModel.definitionSignature(languageId: "de_DE", numpadStyle: "classic")
-                == "de_DE|classic|0"
+                == "de_DE|classic|0|"
         )
         #expect(
             KeyboardViewModel.definitionSignature(languageId: "en_US", numpadStyle: nil)
-                == "en_US||0"
+                == "en_US||0|"
         )
     }
 

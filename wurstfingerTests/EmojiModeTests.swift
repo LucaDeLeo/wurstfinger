@@ -123,3 +123,47 @@ struct EmojiModeTests {
         #expect(backKey.bindings[.tap]?.label == hebrew.numericBackToAlphaLabel)
     }
 }
+
+// MARK: - Custom emoji configuration
+
+struct CustomEmojiTests {
+    private let twelve = ["🍕", "🚀", "🐙", "🌈", "🔥", "💀", "🎸", "🍺", "⚽️", "🧠", "🦄", "🍩"]
+
+    @Test func rowsChunksValidCustomList() {
+        let rows = EmojiLayouts.rows(from: twelve)
+        #expect(rows == [
+            ["🍕", "🚀", "🐙"], ["🌈", "🔥", "💀"],
+            ["🎸", "🍺", "⚽️"], ["🧠", "🦄", "🍩"],
+        ])
+    }
+
+    @Test func rowsFallsBackOnWrongCountOrEmptyEntries() {
+        #expect(EmojiLayouts.rows(from: nil) == EmojiLayouts.defaultEmojis)
+        #expect(EmojiLayouts.rows(from: ["😀"]) == EmojiLayouts.defaultEmojis)
+        var withEmpty = twelve
+        withEmpty[4] = ""
+        #expect(EmojiLayouts.rows(from: withEmpty) == EmojiLayouts.defaultEmojis)
+    }
+
+    @Test func loadDefinitionAppliesCustomEmojis() throws {
+        let (vm, _) = makeViewModel(languageId: "en_US")
+        vm.sharedDefaults.set(twelve, forKey: SettingsKey.customEmojis.rawValue)
+        vm.loadDefinition(for: "en_US")
+
+        let emojiMode = try #require(vm.currentDefinition?.mode(ModeNames.emoji))
+        let topLeft = try #require(emojiMode.key(for: GridSlot.topLeft))
+        #expect(topLeft.bindings[.tap]?.action == .commitText("🍕"))
+        // Utility keys survive the swap.
+        #expect(emojiMode.key(for: UtilitySlot.globe) != nil)
+        #expect(emojiMode.key(for: UtilitySlot.symbols)?.bindings[.tap]?.action
+            == .switchMode(ModeNames.main))
+    }
+
+    @Test func signatureChangesWithCustomEmojis() {
+        let base = KeyboardViewModel.definitionSignature(languageId: "en_US", numpadStyle: nil)
+        let custom = KeyboardViewModel.definitionSignature(
+            languageId: "en_US", numpadStyle: nil, customEmojis: twelve
+        )
+        #expect(base != custom)
+    }
+}

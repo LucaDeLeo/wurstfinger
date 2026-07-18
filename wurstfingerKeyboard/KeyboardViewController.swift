@@ -134,6 +134,9 @@ final class KeyboardViewController: UIInputViewController {
             numpadStyle: numpadStyle,
             thumbKeyOverride: SharedDefaults.store.data(
                 forKey: SettingsKey.keyModificationsParsed.rawValue
+            ),
+            customEmojis: SharedDefaults.store.stringArray(
+                forKey: SettingsKey.customEmojis.rawValue
             )
         )
         // Compare against the view model's record of what it actually loaded —

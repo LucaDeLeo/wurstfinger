@@ -29,11 +29,29 @@ enum EmojiLayouts {
         GridSlot.emojiExtraLeft, GridSlot.emojiExtraCenter, GridSlot.emojiExtraRight,
     ]]
 
+    /// Number of direct-select emoji keys the layer holds.
+    static let slotCount = 12
+
+    /// Validates a user-configured emoji list against the layer's fixed shape:
+    /// exactly `slotCount` non-empty entries, or the defaults win. Chunks the
+    /// flat storage format into the row structure `mode` consumes.
+    static func rows(from custom: [String]?) -> [[String]] {
+        guard let custom, custom.count == slotCount,
+              custom.allSatisfy({ !$0.isEmpty })
+        else { return defaultEmojis }
+        return stride(from: 0, to: slotCount, by: 3).map {
+            Array(custom[$0 ..< $0 + 3])
+        }
+    }
+
     /// Builds the emoji mode. `backToAlphaLabel` labels the key that returns
     /// to the main (alphabetic) layer, matching the numeric layer's label.
-    static func mode(backToAlphaLabel: String = NumericLayouts.defaultBackToAlphaLabel) -> KeyboardMode {
+    static func mode(
+        backToAlphaLabel: String = NumericLayouts.defaultBackToAlphaLabel,
+        emojis: [[String]] = defaultEmojis
+    ) -> KeyboardMode {
         var keys: [String: KeyConfig] = [:]
-        for (rowIdx, row) in defaultEmojis.enumerated() {
+        for (rowIdx, row) in emojis.enumerated() {
             for (colIdx, emoji) in row.enumerated() {
                 let slotId = slotRows[rowIdx][colIdx]
                 keys[slotId] = emojiKey(slotId, emoji: emoji)

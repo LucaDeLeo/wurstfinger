@@ -23,9 +23,13 @@ extension KeyboardViewModel {
             ?? KeyboardRegistry.load(id: LanguageConfig.english.id)
         else { return }
         var definition = applyNumpadStyle(to: base)
-        // Snapshot the override bytes once and both apply and sign that same
-        // snapshot — reading twice could apply one revision but record
+        // Snapshot the customization inputs once and both apply and sign the
+        // same snapshots — reading twice could apply one revision but record
         // another, suppressing the reload the next revision needs.
+        let customEmojis = sharedDefaults.stringArray(
+            forKey: SettingsKey.customEmojis.rawValue
+        )
+        definition = applyCustomEmojis(customEmojis, to: definition)
         let overrideData = sharedDefaults.data(
             forKey: SettingsKey.keyModificationsParsed.rawValue
         )
@@ -39,7 +43,8 @@ extension KeyboardViewModel {
         loadedDefinitionSignature = Self.definitionSignature(
             languageId: definition.id,
             numpadStyle: sharedDefaults.string(forKey: SettingsKey.numpadStyle.rawValue),
-            thumbKeyOverride: overrideData
+            thumbKeyOverride: overrideData,
+            customEmojis: customEmojis
         )
         activeModeName = definition.defaultMode
         pipelineLocale = definition.locale
@@ -55,12 +60,14 @@ extension KeyboardViewModel {
     static func definitionSignature(
         languageId: String,
         numpadStyle: String?,
-        thumbKeyOverride: Data? = nil
+        thumbKeyOverride: Data? = nil,
+        customEmojis: [String]? = nil
     ) -> String {
         // Data.hashValue is seeded per process, which is sufficient here: the
         // signature is only ever compared against one recorded in the same
         // process, never persisted.
-        "\(languageId)|\(numpadStyle ?? "")|\(thumbKeyOverride?.hashValue ?? 0)"
+        let emojis = customEmojis?.joined() ?? ""
+        return "\(languageId)|\(numpadStyle ?? "")|\(thumbKeyOverride?.hashValue ?? 0)|\(emojis)"
     }
 
     /// Swaps the numeric layer to the classic (7-8-9) ordering when the user
@@ -75,6 +82,20 @@ extension KeyboardViewModel {
             backToAlphaLabel: definition.numericBackToAlphaLabel
         )
         return definition.replacingMode(ModeNames.numeric, with: classicNumeric)
+    }
+
+    /// Swaps the emoji layer for one built from the user's chosen emojis.
+    /// The registry caches the default-emoji definition, so this always
+    /// derives from the canonical layer and never mutates the cache.
+    private func applyCustomEmojis(
+        _ custom: [String]?, to definition: KeyboardDefinition
+    ) -> KeyboardDefinition {
+        guard let custom, definition.mode(ModeNames.emoji) != nil else { return definition }
+        let customMode = EmojiLayouts.mode(
+            backToAlphaLabel: definition.numericBackToAlphaLabel,
+            emojis: EmojiLayouts.rows(from: custom)
+        )
+        return definition.replacingMode(ModeNames.emoji, with: customMode)
     }
 
     /// Injects the text input target (typically a `DocumentProxyTarget`).

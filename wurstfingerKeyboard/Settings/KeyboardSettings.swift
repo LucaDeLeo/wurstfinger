@@ -41,6 +41,8 @@ enum SettingsKey: String {
     case keyModificationsYAML
     case keyModificationsParsed
     case doubleTapSpaceAction
+    /// User-chosen emojis for the emoji layer (flat array of 12 strings).
+    case customEmojis
     case hideLetters
     case hideStandardSymbols
     case hideExtraSymbols

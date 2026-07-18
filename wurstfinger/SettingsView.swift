@@ -155,6 +155,14 @@ struct SettingsView: View {
                 )
             }
 
+            NavigationLink(destination: EmojiSettingsView()) {
+                SettingsRow(
+                    icon: "face.smiling", color: .yellow,
+                    title: "Emoji Keys",
+                    subtitle: String(localized: "Choose the twelve quick-access emojis")
+                )
+            }
+
             NavigationLink(destination: AspectRatioSettingsView(aspectRatio: $keyAspectRatio)) {
                 SettingsRow(
                     icon: "square.resize", color: .orange,
