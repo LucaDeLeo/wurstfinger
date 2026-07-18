@@ -1242,139 +1242,139 @@
       },
       "comment": "ACCESSIBILITY label for the space bar (VoiceOver)"
     },
-    "Select all": {
+    "Jump to start": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Alles auswählen"
+            "value": "Zum Anfang springen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tout sélectionner"
+            "value": "Aller au début"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Seleccionar todo"
+            "value": "Ir al inicio"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Seleziona tutto"
+            "value": "Vai all'inizio"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Выбрать всё"
+            "value": "К началу"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zaznacz wszystko"
+            "value": "Przejdź na początek"
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Markera allt"
+            "value": "Hoppa till början"
           }
         },
         "fi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Valitse kaikki"
+            "value": "Siirry alkuun"
           }
         },
         "hr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Odaberi sve"
+            "value": "Skoči na početak"
           }
         },
         "he": {
           "stringUnit": {
             "state": "translated",
-            "value": "בחר הכול"
+            "value": "קפוץ להתחלה"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Chọn tất cả"
+            "value": "Về đầu"
           }
         },
         "fil": {
           "stringUnit": {
             "state": "translated",
-            "value": "Piliin lahat"
+            "value": "Tumalon sa simula"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "تحديد الكل"
+            "value": "الانتقال إلى البداية"
           }
         },
         "el": {
           "stringUnit": {
             "state": "translated",
-            "value": "Επιλογή όλων"
+            "value": "Μετάβαση στην αρχή"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "انتخاب همه"
+            "value": "پرش به ابتدا"
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "सभी चुनें"
+            "value": "शुरुआत पर जाएँ"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "すべてを選択"
+            "value": "先頭へ移動"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "전체 선택"
+            "value": "처음으로 이동"
           }
         },
         "pt": {
           "stringUnit": {
             "state": "translated",
-            "value": "Selecionar tudo"
+            "value": "Ir para o início"
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "เลือกทั้งหมด"
+            "value": "ไปที่จุดเริ่มต้น"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Вибрати все"
+            "value": "Перейти на початок"
           }
         },
         "ur": {
           "stringUnit": {
             "state": "translated",
-            "value": "سبھی منتخب کریں"
+            "value": "شروع پر جائیں"
           }
         }
       }

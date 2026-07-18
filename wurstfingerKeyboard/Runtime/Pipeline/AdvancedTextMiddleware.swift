@@ -49,20 +49,30 @@ struct AdvancedTextMiddleware: ActionMiddleware {
             handlePaste(target: target)
         case .cut:
             handleCut(target: target)
-        case .selectAll:
-            handleSelectAll(target: target)
+        case .jumpToStart:
+            jumpToStart(target: target)
+        case .jumpToEnd:
+            jumpToEnd(target: target)
         default:
             break
         }
     }
 
-    private func handleSelectAll(target: TextInputTarget) {
-        while let after = target.documentContextAfterInput, !after.isEmpty {
-            target.adjustTextPosition(byCharacterOffset: after.count)
-        }
-        if let before = target.documentContextBeforeInput, !before.isEmpty {
-            target.adjustTextPosition(byCharacterOffset: -before.count)
-        }
+    /// Jumps move by exactly one context window. The proxy refreshes its
+    /// document context asynchronously after `adjustTextPosition`, so a loop
+    /// that re-reads context in the same pass would act on stale windows and
+    /// over-shoot; one window (~everything in a typical message field, the
+    /// visible surroundings in a long document) is the largest reliable
+    /// synchronous move. Offsets are UTF-16 code units (see
+    /// `TextInputTarget.adjustTextPosition`), hence `utf16.count`.
+    private func jumpToStart(target: TextInputTarget) {
+        guard let before = target.documentContextBeforeInput, !before.isEmpty else { return }
+        target.adjustTextPosition(byCharacterOffset: -before.utf16.count)
+    }
+
+    private func jumpToEnd(target: TextInputTarget) {
+        guard let after = target.documentContextAfterInput, !after.isEmpty else { return }
+        target.adjustTextPosition(byCharacterOffset: after.utf16.count)
     }
 
     // MARK: - Delete Forward

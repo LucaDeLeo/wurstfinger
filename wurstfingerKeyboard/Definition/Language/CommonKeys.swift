@@ -70,8 +70,8 @@ enum CommonKeys {
             returnAction: nil, accessibilityLabel: String(localized: "Paste")
         ),
         .swipeLeft: KeyBinding(
-            label: "", action: .selectAll, category: .utility,
-            returnAction: nil, accessibilityLabel: String(localized: "Select all")
+            label: "", action: .jumpToStart, category: .utility,
+            returnAction: .jumpToEnd, accessibilityLabel: String(localized: "Jump to start")
         ),
     ]
 

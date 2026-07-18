@@ -151,6 +151,62 @@ struct AdvancedTextMiddlewareDeleteForwardTests {
 
 // MARK: - Capitalize word
 
+struct AdvancedTextCursorJumpTests {
+    @Test func jumpToStartMovesBackByBeforeWindow() {
+        let target = MockTextTarget()
+        target.documentContextBeforeInput = "hello world"
+        let middleware = AdvancedTextFixtures.middleware(target: target)
+
+        middleware.process(AdvancedTextFixtures.context(.jumpToStart)) { _ in }
+
+        #expect(target.events == [.adjustCursor(-11)])
+        #expect(target.documentContextBeforeInput?.isEmpty == true)
+    }
+
+    @Test func jumpToStartUsesUTF16Units() {
+        let target = MockTextTarget()
+        // 👍🏽 = 4 UTF-16 units + "ab" = 6; a grapheme count (3) would strand
+        // the cursor mid-text.
+        target.documentContextBeforeInput = "ab👍🏽"
+        let middleware = AdvancedTextFixtures.middleware(target: target)
+
+        middleware.process(AdvancedTextFixtures.context(.jumpToStart)) { _ in }
+
+        #expect(target.events == [.adjustCursor(-6)])
+    }
+
+    @Test func jumpToStartNoopAtStart() {
+        let target = MockTextTarget()
+        target.documentContextBeforeInput = ""
+        let middleware = AdvancedTextFixtures.middleware(target: target)
+
+        middleware.process(AdvancedTextFixtures.context(.jumpToStart)) { _ in }
+
+        #expect(target.events.isEmpty)
+    }
+
+    @Test func jumpToEndMovesForwardByAfterWindow() {
+        let target = MockTextTarget()
+        target.documentContextAfterInput = "rest of text"
+        let middleware = AdvancedTextFixtures.middleware(target: target)
+
+        middleware.process(AdvancedTextFixtures.context(.jumpToEnd)) { _ in }
+
+        #expect(target.events == [.adjustCursor(12)])
+        #expect(target.documentContextAfterInput?.isEmpty == true)
+    }
+
+    @Test func jumpToEndNoopAtEnd() {
+        let target = MockTextTarget()
+        target.documentContextAfterInput = nil
+        let middleware = AdvancedTextFixtures.middleware(target: target)
+
+        middleware.process(AdvancedTextFixtures.context(.jumpToEnd)) { _ in }
+
+        #expect(target.events.isEmpty)
+    }
+}
+
 struct AdvancedTextCapitalizeWordTests {
     @Test func uppercasesWordBeforeCursor() {
         let target = MockTextTarget()
