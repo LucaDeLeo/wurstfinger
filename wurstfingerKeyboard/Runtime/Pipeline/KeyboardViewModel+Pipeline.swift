@@ -272,6 +272,15 @@ extension KeyboardViewModel {
             }
         ))
 
+        // Touch-offset learning: observe user `.deleteBackward` for the
+        // acceptance-filter veto (§4.1) and the telemetry/A/B correction
+        // counters (§13/§8). Inert unless the feature is on (telemetry A/B
+        // counts always).
+        middlewares.append(TouchLearningMiddleware(onUserDelete: { [weak self] in
+            self?.touchLearning.recordUserDelete()
+            self?.telemetry.recordUserDelete()
+        }))
+
         pipeline = ActionPipeline(middlewares: middlewares)
     }
 
@@ -332,6 +341,68 @@ extension KeyboardViewModel {
         switchToMode(ModeNames.main)
     }
 
+    // MARK: - Touch-Offset Learning Context
+
+    /// Whether the learned touch-offset correction is enabled (§6.1).
+    var isTouchOffsetEnabled: Bool {
+        sharedDefaults.bool(forKey: SettingsKey.touchOffsetEnabled.rawValue)
+    }
+
+    /// The active learning regime: orientation × the user's declared posture
+    /// (§3.1/§6.3). Posture is read fresh from `SharedDefaults` so a change in
+    /// the host app takes effect on the next gesture without a keyboard restart.
+    ///
+    /// On this branch the keyboard renders a portrait arrangement in all
+    /// orientations and the view model does not expose the physical orientation,
+    /// so orientation is fixed to `.portrait` for v1. Add the orientation axis
+    /// once the controller plumbs physical orientation through.
+    var currentTouchRegime: TouchRegime {
+        let posture = PostureClass(
+            settingValue: sharedDefaults.string(forKey: SettingsKey.touchOffsetPosture.rawValue)
+        )
+        return TouchRegime(orientation: .portrait, posture: posture)
+    }
+
+    /// The per-key offsets to apply right now (§4.4, §5.4): the learned model's
+    /// offsets for the current regime, gated by the toggle and the regime's
+    /// maturity. Empty when off or not yet mature → no correction.
+    func currentTouchCorrectionOffsets() -> [String: CGVector] {
+        guard isTouchOffsetEnabled else { return [:] }
+        let model = touchLearning.model(for: currentTouchRegime)
+        guard model.maturity >= TouchOffsetConfig.default.applyOn else { return [:] }
+        return model.allOffsets()
+    }
+
+    /// Whether the learned swipe-sector bias correction is enabled (§14.4).
+    var isSwipeBiasEnabled: Bool {
+        sharedDefaults.bool(forKey: SettingsKey.swipeBiasEnabled.rawValue)
+    }
+
+    /// Re-maps a directional swipe through the learned angular-bias rotation
+    /// (§14.3): the measured angle minus the measured sector's bias, looked up
+    /// again. Identity for non-swipes, missing features, a disabled toggle, or
+    /// an immature regime.
+    func correctedSwipeGesture(_ gesture: GestureType, features: GestureFeatures?) -> GestureType {
+        guard gesture.isDirectionalSwipe, let features, isSwipeBiasEnabled else { return gesture }
+        let model = touchLearning.swipeModel(for: currentTouchRegime)
+        guard model.maturity >= model.config.applyOn else { return gesture }
+        return model.correctedGesture(measuredAngle: features.maxDisplacementAngle)
+    }
+
+    /// Normalized center position of a key in the current arrangement (`[0,1]²`),
+    /// used as the reach-surface input (§5.2). `nil` if the key is not placed.
+    func normalizedKeyPosition(_ keyId: String) -> CGPoint? {
+        guard let arrangement = currentArrangement else { return nil }
+        let cells = GridLayoutSolver.solve(arrangement)
+        guard let cell = cells.first(where: { $0.keyId == keyId }) else { return nil }
+        let columns = max(arrangement.columns, 1)
+        let rows = max(GridLayoutSolver.rowCount(arrangement), 1)
+        return CGPoint(
+            x: (Double(cell.column) + Double(cell.columnSpan) / 2) / Double(columns),
+            y: (Double(cell.row) + Double(cell.rowSpan) / 2) / Double(rows)
+        )
+    }
+
     // MARK: - Gesture Dispatch
 
     /// Central entry point for the data-driven gesture path.
@@ -340,9 +411,29 @@ extension KeyboardViewModel {
     /// The long-press path uses this to decide whether the touch is consumed:
     /// a key without a long-press binding (e.g. return, globe) must keep its
     /// normal tap on release instead of being swallowed by the failed hold.
+    /// - Parameters:
+    ///   - touchdown: the touchdown normalized to the key's frame (`[0,1]²`),
+    ///     plumbed for offset learning (§4.1). `nil` from callers that don't
+    ///     supply it (tests, internal slide-driven taps). Consumed in P5.
+    ///   - features: discriminating gesture features for telemetry (§13).
     @discardableResult
-    func handleGesture(_ gesture: GestureType, keyId: String, isReturn: Bool) -> Bool {
+    func handleGesture(
+        _ gesture: GestureType,
+        keyId: String,
+        isReturn: Bool,
+        touchdown: CGPoint? = nil,
+        features: GestureFeatures? = nil
+    ) -> Bool {
         guard let mode = activeModeFromDefinition else { return false }
+
+        // Swipe-sector bias correction (§14.3): rotate the measured angle by
+        // the learned bias and re-map the sector before resolving, so telemetry
+        // and dispatch both see the corrected direction.
+        let gesture = correctedSwipeGesture(gesture, features: features)
+
+        // Telemetry (§13) + A/B proxy metric (§8): record every classified
+        // gesture (all classes, incl. circular below).
+        telemetry.recordGesture(gesture, isReturn: isReturn, features: features)
 
         // Circular gestures: try requested direction, fall back to opposite.
         if gesture == .circularClockwise || gesture == .circularCounterclockwise {
@@ -352,6 +443,32 @@ extension KeyboardViewModel {
 
         let chain = isReturn ? returnSwipeResolverChain : resolverChain
         guard let binding = chain?.resolve(keyId: keyId, gesture: gesture, in: mode) else { return false }
+
+        // Touch-offset learning (§4.1): record real taps (with a touchdown) for
+        // the acceptance filter. User deletes are observed by
+        // TouchLearningMiddleware. Inert unless the feature is on.
+        if gesture == .tap, !isReturn, let touchdown {
+            touchLearning.recordTap(keyId: keyId, touchdown: touchdown)
+            // Counterfactual benefit (§8): did the applied correction change which
+            // key this tap hit? Uses the same offset that drove the assignment.
+            if isTouchOffsetEnabled {
+                let offset = currentTouchCorrectionOffsets()[keyId] ?? .zero
+                telemetry.recordTapOutcome(
+                    regimeKey: currentTouchRegime.key,
+                    isFlip: TelemetryController.isFlip(touchdown: touchdown, offset: offset)
+                )
+            }
+        }
+
+        // Swipe-bias learning (§14.1): the resolved sector is the intent label;
+        // the sample is the raw angle's residual against it. Return swipes share
+        // the sector semantics, so they are learned too. Inert unless enabled.
+        if gesture.isDirectionalSwipe, let features {
+            touchLearning.recordSwipe(
+                sector: gesture,
+                measuredAngle: Double(features.maxDisplacementAngle)
+            )
+        }
 
         // Mode and language switches bypass the pipeline, so their
         // confirmation tick fires here instead of in the haptic middleware —

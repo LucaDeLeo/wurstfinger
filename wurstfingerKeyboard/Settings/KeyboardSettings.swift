@@ -49,6 +49,19 @@ enum SettingsKey: String {
     /// Holding a letter key types the digit that key carries on the
     /// numeric layer, without switching modes.
     case longPressNumbersEnabled
+    /// Master toggle for the learned touch-offset correction feature (default off).
+    /// See `docs/touch-offset-correction.md` §6.1.
+    case touchOffsetEnabled
+    /// User-declared hand posture (`PostureClass.rawValue`) that selects the
+    /// active learning regime. Explicit choice, not auto-detected; default
+    /// `oneThumbRight`. See §3.1/§6.3.
+    case touchOffsetPosture
+    /// Schema version of the persisted touch-offset model; bump invalidates
+    /// incompatible stored state. See §7.
+    case touchModelSchemaVersion
+    /// Toggle for the learned swipe-sector bias correction (default off).
+    /// See `docs/touch-offset-correction.md` §14.
+    case swipeBiasEnabled
 }
 
 /// Replacement to insert when the user double-taps the space bar within
