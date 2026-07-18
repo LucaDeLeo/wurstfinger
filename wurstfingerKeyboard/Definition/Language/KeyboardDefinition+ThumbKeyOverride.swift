@@ -58,7 +58,7 @@ extension KeyboardMode {
                 let coord = "\(row)_\(col)"
 
                 if let center = override.centerOverrides[coord] {
-                    let text = uppercase ? center.uppercased(with: locale) : center
+                    let text = uppercase ? center.keyboardUppercased(with: locale) : center
                     bindings[.tap] = KeyBinding(
                         label: text,
                         action: .commitText(text),
@@ -71,10 +71,10 @@ extension KeyboardMode {
                 for (suffix, gesture) in Self.thumbKeyDirectionMap {
                     let key = "\(coord)_\(suffix)"
                     guard let char = override.specialOverrides[key] else { continue }
-                    let text = uppercase ? char.uppercased(with: locale) : char
+                    let text = uppercase ? char.keyboardUppercased(with: locale) : char
                     let isLetter = char.unicodeScalars.contains { CharacterSet.letters.contains($0) }
                     let returnAction: KeyAction? = (isLetter && !uppercase)
-                        ? .commitText(text.uppercased(with: locale))
+                        ? .commitText(text.keyboardUppercased(with: locale))
                         : nil
                     bindings[gesture] = KeyBinding(
                         label: text,

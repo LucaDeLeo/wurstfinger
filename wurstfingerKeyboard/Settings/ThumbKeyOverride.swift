@@ -30,7 +30,11 @@ struct ThumbKeyOverride: Codable, Equatable {
         guard let data = defaults.data(forKey: SettingsKey.keyModificationsParsed.rawValue) else {
             return nil
         }
-        return try? JSONDecoder().decode(ThumbKeyOverride.self, from: data)
+        return decode(data)
+    }
+
+    static func decode(_ data: Data) -> ThumbKeyOverride? {
+        try? JSONDecoder().decode(ThumbKeyOverride.self, from: data)
     }
 
     func save(to defaults: UserDefaults) {

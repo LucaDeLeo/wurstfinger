@@ -545,7 +545,7 @@ enum LanguageDefinitions {
     static let enThumbKeySpanish = LanguageDescriptor(
         id: "en_thumbkey_es",
         title: "ENThumbKey + Español",
-        localeIdentifier: "en_US"
+        localeIdentifier: "es_ES"
     ) { meta in
         GridKeyboardFactory.layout(
             id: meta.id,

@@ -23,7 +23,13 @@ extension KeyboardViewModel {
             ?? KeyboardRegistry.load(id: LanguageConfig.english.id)
         else { return }
         var definition = applyNumpadStyle(to: base)
-        if let override = ThumbKeyOverride.load(from: sharedDefaults) {
+        // Snapshot the override bytes once and both apply and sign that same
+        // snapshot — reading twice could apply one revision but record
+        // another, suppressing the reload the next revision needs.
+        let overrideData = sharedDefaults.data(
+            forKey: SettingsKey.keyModificationsParsed.rawValue
+        )
+        if let override = overrideData.flatMap(ThumbKeyOverride.decode) {
             definition = definition.applying(override)
         }
         currentDefinition = definition
@@ -33,9 +39,7 @@ extension KeyboardViewModel {
         loadedDefinitionSignature = Self.definitionSignature(
             languageId: definition.id,
             numpadStyle: sharedDefaults.string(forKey: SettingsKey.numpadStyle.rawValue),
-            thumbKeyOverride: sharedDefaults.data(
-                forKey: SettingsKey.keyModificationsParsed.rawValue
-            )
+            thumbKeyOverride: overrideData
         )
         activeModeName = definition.defaultMode
         pipelineLocale = definition.locale
@@ -194,7 +198,9 @@ extension KeyboardViewModel {
         ))
 
         // 5. Double-tap space → punctuation (must run before TextInputMiddleware
-        //    so it can short-circuit the second .space and substitute ", " or ". ").
+        //    so it can rewrite the second .space into .commitText(", "/". ")
+        //    while downstream middlewares — auto-capitalization in particular —
+        //    still observe the mutation).
         let doubleTapMiddleware = DoubleTapSpaceMiddleware(
             setting: { [weak self] in
                 guard let raw = self?.sharedDefaults.string(forKey: SettingsKey.doubleTapSpaceAction.rawValue),
@@ -202,7 +208,6 @@ extension KeyboardViewModel {
                 else { return .default }
                 return parsed
             },
-            insertText: { [weak self] text in self?.textInputTarget?.insertText(text) },
             deleteBackward: { [weak self] in self?.textInputTarget?.deleteBackward() }
         )
         doubleTapSpaceMiddleware = doubleTapMiddleware

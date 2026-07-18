@@ -9,7 +9,6 @@ import Testing
 
 struct DoubleTapSpaceMiddlewareTests {
     private final class Recorder {
-        var inserts: [String] = []
         var deletes = 0
     }
 
@@ -22,7 +21,6 @@ struct DoubleTapSpaceMiddlewareTests {
             now: clock,
             window: 0.3,
             setting: { mode },
-            insertText: { recorder.inserts.append($0) },
             deleteBackward: { recorder.deletes += 1 }
         )
         return (middleware, recorder)
@@ -47,9 +45,11 @@ struct DoubleTapSpaceMiddlewareTests {
         t = t.addingTimeInterval(0.15)
         runSpace(middleware, forwardedActions: &forwarded)
 
-        #expect(forwarded == [.space])
+        // The second tap must delete the pending space and forward the
+        // replacement as .commitText so downstream middlewares (text input,
+        // auto-capitalization) observe the mutation.
+        #expect(forwarded == [.space, .commitText(", ")])
         #expect(recorder.deletes == 1)
-        #expect(recorder.inserts == [", "])
     }
 
     @Test func secondTapOutsideWindowOnlyForwards() {
@@ -63,7 +63,6 @@ struct DoubleTapSpaceMiddlewareTests {
 
         #expect(forwarded == [.space, .space])
         #expect(recorder.deletes == 0)
-        #expect(recorder.inserts.isEmpty)
     }
 
     @Test func tripleTapDoesNotChainReplacement() {
@@ -77,9 +76,8 @@ struct DoubleTapSpaceMiddlewareTests {
         t = t.addingTimeInterval(0.10)
         runSpace(middleware, forwardedActions: &forwarded)
 
-        #expect(forwarded == [.space, .space])
+        #expect(forwarded == [.space, .commitText(", "), .space])
         #expect(recorder.deletes == 1)
-        #expect(recorder.inserts == [", "])
     }
 
     @Test func cancelPendingTapPreventsReplacement() {
@@ -94,7 +92,6 @@ struct DoubleTapSpaceMiddlewareTests {
 
         #expect(forwarded == [.space, .space])
         #expect(recorder.deletes == 0)
-        #expect(recorder.inserts.isEmpty)
     }
 
     @Test func nonSpaceActionResetsTimer() {
@@ -110,7 +107,6 @@ struct DoubleTapSpaceMiddlewareTests {
 
         #expect(forwarded == [.space, .commitText("a"), .space])
         #expect(recorder.deletes == 0)
-        #expect(recorder.inserts.isEmpty)
     }
 
     @Test func offSettingNeverReplaces() {
@@ -124,7 +120,6 @@ struct DoubleTapSpaceMiddlewareTests {
 
         #expect(forwarded == [.space, .space])
         #expect(recorder.deletes == 0)
-        #expect(recorder.inserts.isEmpty)
     }
 
     @Test func periodSettingInsertsPeriodSpace() {
@@ -136,8 +131,48 @@ struct DoubleTapSpaceMiddlewareTests {
         t = t.addingTimeInterval(0.15)
         runSpace(middleware, forwardedActions: &forwarded)
 
-        #expect(forwarded == [.space])
+        #expect(forwarded == [.space, .commitText(". ")])
         #expect(recorder.deletes == 1)
-        #expect(recorder.inserts == [". "])
+    }
+}
+
+// MARK: - Pipeline integration
+
+struct DoubleTapSpacePipelineTests {
+    /// Regression: the second tap used to short-circuit the pipeline, so
+    /// `AutoCapitalizationMiddleware` never saw the ". " and the next letter
+    /// stayed lowercase — unlike a manually typed period.
+    @Test func doubleTapPeriodEngagesAutoCapitalization() {
+        let (vm, target) = makeViewModel(languageId: "de_DE")
+        vm.sharedDefaults.set(true, forKey: SettingsKey.autoCapitalizeEnabled.rawValue)
+        vm.sharedDefaults.set(
+            DoubleTapSpaceAction.period.rawValue,
+            forKey: SettingsKey.doubleTapSpaceAction.rawValue
+        )
+        target.documentContextBeforeInput = "Hallo"
+
+        // Two synchronous dispatches land far inside the 0.3s window.
+        vm.dispatchAction(.space)
+        vm.dispatchAction(.space)
+
+        #expect(target.documentContextBeforeInput == "Hallo. ")
+        #expect(vm.activeModeName == ModeNames.shifted)
+        #expect(vm.shiftEngagedByAutoCapitalization)
+    }
+
+    @Test func doubleTapCommaDoesNotEngageAutoCapitalization() {
+        let (vm, target) = makeViewModel(languageId: "de_DE")
+        vm.sharedDefaults.set(true, forKey: SettingsKey.autoCapitalizeEnabled.rawValue)
+        vm.sharedDefaults.set(
+            DoubleTapSpaceAction.comma.rawValue,
+            forKey: SettingsKey.doubleTapSpaceAction.rawValue
+        )
+        target.documentContextBeforeInput = "Hallo"
+
+        vm.dispatchAction(.space)
+        vm.dispatchAction(.space)
+
+        #expect(target.documentContextBeforeInput == "Hallo, ")
+        #expect(vm.activeModeName == ModeNames.main)
     }
 }

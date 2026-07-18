@@ -69,7 +69,7 @@ enum CommonKeys {
         ),
         .swipeLeft: KeyBinding(
             label: "", action: .selectAll, category: .utility,
-            returnAction: nil, accessibilityLabel: "Alles auswählen"
+            returnAction: nil, accessibilityLabel: String(localized: "Select all")
         ),
     ]
 

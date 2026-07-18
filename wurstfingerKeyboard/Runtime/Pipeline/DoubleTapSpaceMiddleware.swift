@@ -14,10 +14,11 @@ import Foundation
 /// The middleware tracks the timestamp of the most recent `.space` action.
 /// On a second `.space` within the window:
 ///   1. The previous space is removed via the injected `deleteBackward`.
-///   2. The replacement (", " or ". ") is inserted via `insertText`.
-///   3. The action is short-circuited (not forwarded), so downstream
-///      middlewares (TextInputMiddleware in particular) don't insert the
-///      raw space again.
+///   2. The action is rewritten to `.commitText(", ")` / `.commitText(". ")`
+///      and forwarded, so `TextInputMiddleware` performs the insertion and
+///      downstream middlewares still observe the mutation — in particular
+///      `AutoCapitalizationMiddleware` must re-evaluate after ". " so the
+///      next letter gets one-shot shift, exactly as after a typed period.
 ///
 /// Any non-space action clears the timestamp, so a tap-then-letter-then-tap
 /// sequence does not trigger a replacement.
@@ -25,7 +26,6 @@ final class DoubleTapSpaceMiddleware: ActionMiddleware {
     private let now: () -> Date
     private let setting: () -> DoubleTapSpaceAction
     private let window: TimeInterval
-    private let insertText: (String) -> Void
     private let deleteBackward: () -> Void
 
     private var lastSpaceCommittedAt: Date?
@@ -34,13 +34,11 @@ final class DoubleTapSpaceMiddleware: ActionMiddleware {
         now: @escaping () -> Date = Date.init,
         window: TimeInterval = KeyboardConstants.SpaceGestures.doubleTapWindow,
         setting: @escaping () -> DoubleTapSpaceAction,
-        insertText: @escaping (String) -> Void,
         deleteBackward: @escaping () -> Void
     ) {
         self.now = now
         self.window = window
         self.setting = setting
-        self.insertText = insertText
         self.deleteBackward = deleteBackward
     }
 
@@ -66,8 +64,10 @@ final class DoubleTapSpaceMiddleware: ActionMiddleware {
         let current = now()
         if let previous = lastSpaceCommittedAt, current.timeIntervalSince(previous) <= window {
             deleteBackward()
-            insertText(replacement)
             lastSpaceCommittedAt = nil
+            var replaced = context
+            replaced.action = .commitText(replacement)
+            next(replaced)
             return
         }
 
