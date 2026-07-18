@@ -215,7 +215,10 @@ extension KeyboardViewModel {
         middlewares.append(AdvancedTextMiddleware(
             target: { [weak self] in self?.textInputTarget },
             locale: { [weak self] in self?.pipelineLocale ?? Locale.current },
-            onClipboardSuccess: { [weak self] in self?.feedbackStateChange() }
+            onClipboardSuccess: { [weak self] in self?.feedbackStateChange() },
+            speak: { [weak self] text, locale in
+                self?.speechSpeaker.speak(text, locale: locale)
+            }
         ))
 
         // 5. Double-tap space → punctuation (must run before TextInputMiddleware

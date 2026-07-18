@@ -59,6 +59,10 @@ enum KeyAction: Codable, Equatable {
     /// Jump the cursor to the end of the document.
     case jumpToEnd
 
+    /// Speak the selected text (or, without a selection, the text before the
+    /// cursor) via text-to-speech.
+    case speak
+
     /// No action (empty slot)
     case none
 }

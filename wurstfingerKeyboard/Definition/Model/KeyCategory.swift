@@ -39,7 +39,7 @@ extension KeyAction {
              .advanceToNextInputMode, .dismissKeyboard, .switchToNextLanguage:
             return .utility
         case .copy, .paste, .cut: return .utility
-        case .jumpToStart, .jumpToEnd: return .utility
+        case .jumpToStart, .jumpToEnd, .speak: return .utility
         case .none: return .utility
         }
     }

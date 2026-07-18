@@ -103,6 +103,10 @@ final class KeyboardViewModel: ObservableObject {
     /// drag/slide gestures can cancel a pending second-tap before it fires.
     weak var doubleTapSpaceMiddleware: DoubleTapSpaceMiddleware?
 
+    /// Text-to-speech for the speak action. Lazy so the synthesizer only
+    /// exists (and costs memory) once the gesture is actually used.
+    lazy var speechSpeaker = SpeechSpeaker()
+
     /// Whether the current `shifted` mode was engaged by auto-capitalization
     /// (as opposed to a manual shift tap). Only auto-engaged shift may be
     /// released by `refreshAutoCapitalization()`; cleared on any mode change.

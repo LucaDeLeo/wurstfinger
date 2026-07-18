@@ -28,6 +28,11 @@ enum CommonKeys {
             category: .utility, returnAction: nil,
             accessibilityLabel: String(localized: "Switch keyboard")
         )
+        bindings[.swipeUp] = KeyBinding(
+            label: "", action: .speak,
+            category: .utility, returnAction: nil,
+            accessibilityLabel: String(localized: "Speak text")
+        )
         bindings[.swipeDown] = KeyBinding(
             label: "", action: .dismissKeyboard,
             category: .utility, returnAction: nil,

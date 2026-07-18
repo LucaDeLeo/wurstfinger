@@ -207,6 +207,45 @@ struct AdvancedTextCursorJumpTests {
     }
 }
 
+struct AdvancedTextSpeakTests {
+    private func spokenText(
+        selected: String?, before: String?
+    ) -> [(String, Locale)] {
+        let target = MockTextTarget()
+        target.selectedText = selected
+        target.documentContextBeforeInput = before
+        var spoken: [(String, Locale)] = []
+        let middleware = AdvancedTextMiddleware(
+            target: { target },
+            locale: { Locale(identifier: "de_DE") },
+            speak: { spoken.append(($0, $1)) }
+        )
+        middleware.process(AdvancedTextFixtures.context(.speak)) { _ in }
+        return spoken
+    }
+
+    @Test func speaksSelectionWhenPresent() {
+        let spoken = spokenText(selected: "markiert", before: "davor getippt")
+        #expect(spoken.map(\.0) == ["markiert"])
+        #expect(spoken.first?.1.identifier == "de_DE")
+    }
+
+    @Test func fallsBackToTextBeforeCursor() {
+        let spoken = spokenText(selected: nil, before: "  Hallo Welt. ")
+        #expect(spoken.map(\.0) == ["Hallo Welt."])
+    }
+
+    @Test func emptySelectionFallsBackToContext() {
+        let spoken = spokenText(selected: "", before: "Kontext")
+        #expect(spoken.map(\.0) == ["Kontext"])
+    }
+
+    @Test func nothingToSpeakIsSilent() {
+        #expect(spokenText(selected: nil, before: nil).isEmpty)
+        #expect(spokenText(selected: nil, before: "   \n").isEmpty)
+    }
+}
+
 struct AdvancedTextCapitalizeWordTests {
     @Test func uppercasesWordBeforeCursor() {
         let target = MockTextTarget()

@@ -19,15 +19,18 @@ struct AdvancedTextMiddleware: ActionMiddleware {
     private let targetProvider: () -> TextInputTarget?
     private let localeProvider: () -> Locale
     private let onClipboardSuccess: () -> Void
+    private let speak: (String, Locale) -> Void
 
     init(
         target: @escaping () -> TextInputTarget?,
         locale: @escaping () -> Locale,
-        onClipboardSuccess: @escaping () -> Void = {}
+        onClipboardSuccess: @escaping () -> Void = {},
+        speak: @escaping (String, Locale) -> Void = { _, _ in }
     ) {
         targetProvider = target
         localeProvider = locale
         self.onClipboardSuccess = onClipboardSuccess
+        self.speak = speak
     }
 
     func process(_ context: ActionContext, next: (ActionContext) -> Void) {
@@ -53,6 +56,10 @@ struct AdvancedTextMiddleware: ActionMiddleware {
             jumpToStart(target: target)
         case .jumpToEnd:
             jumpToEnd(target: target)
+        case .speak:
+            if let text = Self.speakableText(from: target) {
+                speak(text, localeProvider())
+            }
         default:
             break
         }
@@ -73,6 +80,21 @@ struct AdvancedTextMiddleware: ActionMiddleware {
     private func jumpToEnd(target: TextInputTarget) {
         guard let after = target.documentContextAfterInput, !after.isEmpty else { return }
         target.adjustTextPosition(byCharacterOffset: after.utf16.count)
+    }
+
+    // MARK: - Speak
+
+    /// Text the speak action should read aloud: the selection when one
+    /// exists, otherwise the context before the cursor (the proxy caps that
+    /// window at roughly a few hundred characters — the recent sentences,
+    /// not the whole document). `nil` when there is nothing worth speaking.
+    static func speakableText(from target: TextInputTarget) -> String? {
+        let candidate = target.selectedText.flatMap { $0.isEmpty ? nil : $0 }
+            ?? target.documentContextBeforeInput
+        guard let text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return nil }
+        return text
     }
 
     // MARK: - Delete Forward
